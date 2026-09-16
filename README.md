@@ -36,13 +36,14 @@ brew install frantic1048/tap/blend
 
 ### Installer
 
-Release archives are published from
-[frantic1048/Vanilla](https://github.com/frantic1048/Vanilla/releases). The
-installer selects the current platform archive, verifies its embedded SHA256
+The current stable installer comes from the final Vanilla-hosted 0.2.x release.
+Starting with 0.3.0, release archives will be published from
+[frantic1048/blend](https://github.com/frantic1048/blend/releases). The
+installer selects the requested platform archive, verifies its embedded SHA256
 checksum, and installs to `~/.local/bin` by default:
 
 ```sh
-curl -fsSLO https://github.com/frantic1048/Vanilla/releases/latest/download/blend-installer.sh
+curl -fsSLO https://github.com/frantic1048/Vanilla/releases/download/blend-v0.2.16/blend-installer.sh
 sh blend-installer.sh
 ```
 
@@ -69,12 +70,12 @@ The image entrypoint is `blend`. Stable releases publish both a version tag and
 ### From source
 
 ```sh
-git clone https://github.com/frantic1048/Vanilla.git
-cd Vanilla/blend
+git clone https://github.com/frantic1048/blend.git
+cd blend
 cargo build --release
 ```
 
-The workspace writes the binary to `../target/release/blend`.
+The build writes the binary to `target/release/blend`.
 
 ## Quick start
 
@@ -150,5 +151,7 @@ and does not preview replacement content.
 - [DESIGN.md](docs/DESIGN.md) — durable design rationale, trade-offs, and scope.
 - [CHANGELOG.md](CHANGELOG.md) — release history.
 
-Blend is currently developed and released from the Vanilla repository. Vanilla
-is also its primary real-world consumer and integration corpus.
+Versions through 0.2.x were developed and released from the
+[Vanilla repository](https://github.com/frantic1048/Vanilla). This repository
+is canonical from 0.3.0 onward, while Vanilla remains the primary real-world
+consumer and integration corpus.

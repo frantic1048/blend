@@ -1,21 +1,20 @@
 # Development
 
-This document describes the implementation and maintenance of Blend while it
-lives in the Vanilla workspace. User-visible behavior belongs in
-[GUIDE.md](GUIDE.md); durable design rationale belongs in
-[DESIGN.md](DESIGN.md).
+This document describes the implementation and maintenance of Blend.
+User-visible behavior belongs in [GUIDE.md](GUIDE.md); durable design rationale
+belongs in [DESIGN.md](DESIGN.md).
 
 ## Workspace and toolchain
 
-Blend is the `blend` package in the root Cargo workspace. Cargo artifacts are
-written to the root `target/` directory.
+Blend is a standalone Cargo package. Cargo artifacts are written to the root
+`target/` directory.
 
 The toolchain is pinned by the root `rust-toolchain.toml`:
 
-- Rust 1.98.0
+- Rust 1.98.1
 - edition 2024
 
-The Nickel integration uses exact direct pins in `blend/Cargo.toml`:
+The Nickel integration uses exact direct pins in `Cargo.toml`:
 
 - `nickel-lang = 2.2.0`
 - `nickel-lang-core = 0.18.0`
@@ -40,20 +39,17 @@ just fmt-check
 just clippy
 ```
 
-The corresponding crate-level commands are:
+The corresponding Cargo commands are:
 
 ```sh
-cd blend
 cargo build --release
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test --release
-cargo run -- check
-cargo run -- format --check
+cargo clippy --locked -- -D warnings
+cargo test --locked
 ```
 
-`just build` also refreshes the `bin/blend` symlink. Use a direct Cargo build
-when only the binary is needed.
+`just build` produces `target/release/blend`; `just build-debug` produces the
+debug binary.
 
 ## Architecture
 
@@ -289,28 +285,28 @@ end-to-end case showing its observable sync behavior.
 
 ## CI
 
-`Blend CI` runs on macOS and Ubuntu for Blend/workspace changes:
+`Blend CI` runs on macOS and Ubuntu for package changes:
 
 - `cargo fmt --check`
-- `cargo clippy -- -D warnings`
-- `cargo test`
-- `cargo run -- check`
-- `cargo run -- format --check`
+- `cargo clippy --locked -- -D warnings`
+- `cargo test --locked`
 
-`Orders CI` uses the pinned released
-`ghcr.io/frantic1048/blend:0.2.15` image to validate and format-check the real
-`orders/` tree. It is released-binary compatibility coverage, not a substitute
-for testing the in-branch Blend implementation.
+The separate `Vanilla integration` job shallow-checks out Vanilla's default
+branch and uses the in-branch Blend binary to validate and format-check its real
+`orders/` tree. Cross-repository integration coverage complements, but does not
+replace, package tests.
 
-Both blocking CI workflows use Harden Runner with an outbound allowlist.
+CI uses Harden Runner with an outbound allowlist.
 
 ## Release flow
 
-`release-plz` owns release PRs, `blend/CHANGELOG.md`, and
-`blend-v<version>` tags. The workspace is configured for Git-only releases:
+`release-plz` owns release PRs, `CHANGELOG.md`, and `blend-v<version>` tags.
+The repository is configured for Git-only releases:
 Cargo publication and release creation are disabled in release-plz itself.
+Its workflow remains manual-only until the standalone release baseline is
+established, preventing the bootstrap push from re-releasing 0.2.16.
 
-A `blend-v*` tag starts the Release workflow, which:
+A `blend-v*` tag starts a release that:
 
 1. builds archives for Apple aarch64, Apple x86_64, and Linux x86_64;
 2. emits SHA256 files and build-provenance attestations;

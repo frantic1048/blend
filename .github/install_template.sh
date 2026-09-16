@@ -6,11 +6,11 @@ set -eu
 # blend installer
 # Template lives in-repo; CI generates the release version with embedded
 # checksums and version number. Do not edit the __PLACEHOLDER__ values by hand.
-# https://github.com/frantic1048/Vanilla
+# https://github.com/frantic1048/blend
 
 APP_NAME="blend"
 APP_VERSION="__APP_VERSION__"
-REPO="frantic1048/Vanilla"
+REPO="frantic1048/blend"
 
 # SHA256 checksums embedded at CI generation time
 CHECKSUM_AARCH64_APPLE="__CHECKSUM_AARCH64_APPLE_DARWIN__"

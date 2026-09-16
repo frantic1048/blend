@@ -245,9 +245,11 @@ them into the core would weaken Blend's small declarative model.
 ## Repository history
 
 The current Rust/Nickel Blend replaced Vanilla's earlier Nushell and Stow
-workflow. Versions through the current 0.2.x line are developed and released
-from the Vanilla repository, which also supplies the primary real-world Order
-corpus.
+workflow. Versions through 0.2.x were developed and released from the Vanilla
+repository. This standalone history was extracted from the final Vanilla-hosted
+`blend-v0.2.16` release at commit
+`e5389408b6e453f6f575d3436de357412cd2c528`; 0.3.0 onward is developed and
+released here. Vanilla remains the primary real-world Order corpus.
 
 Historical implementation plans and resolved defects remain available through
 Git history and private project records. They are intentionally not copied into

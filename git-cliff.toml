@@ -28,13 +28,20 @@ trim = true
 tag_pattern = "blend-v[0-9].*"
 # Keep blend release notes scoped to the product plus release/build plumbing.
 include_paths = [
-  "blend/**",
+  "src/**",
+  "tests/**",
+  "docs/**",
   "Cargo.toml",
   "Cargo.lock",
+  "rust-toolchain.toml",
+  "README.md",
+  "Dockerfile",
+  ".dockerignore",
+  "justfile",
   "release-plz.toml",
   "git-cliff.toml",
-  "dist-workspace.toml",
-  ".github/dist-build-setup.yml",
+  ".github/install_template.sh",
+  ".github/workflows/blend-ci.yml",
   ".github/workflows/release-plz.yml",
   ".github/workflows/blend-v-release.yml",
 ]
@@ -42,7 +49,7 @@ include_paths = [
 # so the catch-all parser can pick them up instead of silently dropping them.
 filter_unconventional = false
 commit_preprocessors = [
-  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/frantic1048/Vanilla/pull/${1}))" },
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/frantic1048/blend/pull/${1}))" },
 ]
 commit_parsers = [
   { message = "^feat", group = "added" },

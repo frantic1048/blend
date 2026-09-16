@@ -6,14 +6,15 @@ on:
       - "blend-v**[0-9]+.[0-9]+.[0-9]+*"
 
 permissions:
-  contents: write
-  attestations: write
-  id-token: write
-  packages: write
+  contents: read
 
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +45,6 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-        working-directory: blend
 
       - name: Package archive
         shell: bash
@@ -52,7 +52,7 @@ jobs:
           ARCHIVE_DIR="blend-${{ matrix.target }}"
           mkdir "$ARCHIVE_DIR"
           cp "target/${{ matrix.target }}/release/blend" "$ARCHIVE_DIR/"
-          cp blend/README.md blend/CHANGELOG.md LICENSE "$ARCHIVE_DIR/"
+          cp README.md CHANGELOG.md LICENSE "$ARCHIVE_DIR/"
           tar cJf "${ARCHIVE_DIR}.tar.xz" "$ARCHIVE_DIR"
           sha256sum "${ARCHIVE_DIR}.tar.xz" > "${ARCHIVE_DIR}.tar.xz.sha256"
 
@@ -73,6 +73,8 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Harden the runner (audit all outbound calls)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -126,7 +128,7 @@ jobs:
               next
             }
             found { print }
-          ' blend/CHANGELOG.md)
+          ' CHANGELOG.md)
 
           if [ -z "$NOTES" ]; then
             NOTES="Release blend v${VERSION}"
@@ -170,6 +172,11 @@ jobs:
     name: Publish Docker image
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+      packages: write
     steps:
       - name: Harden the runner (Block unapproved outbound calls)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -203,7 +210,7 @@ jobs:
       - name: Extract binary
         run: |
           tar xJf artifacts/blend-x86_64-unknown-linux-gnu.tar.xz
-          cp blend-x86_64-unknown-linux-gnu/blend blend/
+          cp blend-x86_64-unknown-linux-gnu/blend ./blend
 
       - name: Log in to ghcr.io
         uses: step-security/docker-login-action@8c7b695d8738c5699a679ff5254baf0f19f20a94 # v4.6.0
@@ -230,7 +237,7 @@ jobs:
         id: build
         uses: step-security/docker-build-push-action@144392094f7fc3199dda455efe3b70dbea4b72a0 # v7.3.0
         with:
-          context: blend
+          context: .
           push: true
           tags: ${{ steps.tags.outputs.tags }}
 
@@ -244,6 +251,8 @@ jobs:
     name: Notify Homebrew tap
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Harden the runner (audit all outbound calls)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -285,4 +294,3 @@ jobs:
             -f "client_payload[version]=$VERSION"
 
           echo "::notice::Dispatched formula update for blend v${VERSION} to homebrew-tap"
-

@@ -1,16 +1,8 @@
 name: Release-plz
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - "blend/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "release-plz.toml"
-      - "git-cliff.toml"
-      - ".github/workflows/release-plz.yml"
+  # Enable the main-branch push trigger after establishing the standalone
+  # release baseline. Until then, an automatic run could re-release 0.2.16.
   workflow_dispatch:
 
 permissions:

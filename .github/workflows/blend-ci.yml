@@ -2,19 +2,23 @@ name: Blend CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
-      - "blend/**"
+      - "src/**"
+      - "tests/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "justfile"
       - ".github/workflows/blend-ci.yml"
   pull_request:
     paths:
-      - "blend/**"
+      - "src/**"
+      - "tests/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "justfile"
       - ".github/workflows/blend-ci.yml"
 
 permissions:
@@ -26,9 +30,6 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: blend
     steps:
       - name: Harden the runner (Block unapproved outbound calls)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -36,6 +37,7 @@ jobs:
           egress-policy: block
           allowed-endpoints: >
             github.com:443
+            api.github.com:443
             index.crates.io:443
             static.crates.io:443
             static.rust-lang.org:443
@@ -47,7 +49,52 @@ jobs:
           components: rustfmt, clippy
       - uses: step-security/rust-cache@851174d9a2fdc03e0896e02844dcc61d81dd7851 # v2.9.1
       - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
-      - run: cargo run -- check
-      - run: cargo run -- format --check
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo test --locked
+
+  vanilla-integration:
+    name: Vanilla integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Block unapproved outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            index.crates.io:443
+            static.crates.io:443
+            static.rust-lang.org:443
+
+      - name: Checkout Blend
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3 # v1.3.0
+        with:
+          cache: false
+
+      - uses: step-security/rust-cache@851174d9a2fdc03e0896e02844dcc61d81dd7851 # v2.9.1
+
+      - name: Checkout Vanilla default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: frantic1048/Vanilla
+          path: vanilla
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build current Blend
+        run: cargo build --locked
+
+      - name: Report Vanilla revision
+        run: git -C vanilla rev-parse HEAD
+
+      - name: Validate Vanilla Orders
+        run: ./target/debug/blend --blend-dir vanilla check
+
+      - name: Check Vanilla Order formatting
+        run: ./target/debug/blend --blend-dir vanilla format --check

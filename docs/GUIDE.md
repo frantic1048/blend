@@ -386,7 +386,7 @@ The declared field is enforced while application-owned state remains untouched.
 | `blend format [orders...]` | Source | Format `order.ncl` files; `--check` is read-only |
 | `blend init` | Source and config Target | Initialize or refresh generated modules and Blend configuration |
 | `blend sync [orders...]` | Source, Target, and state | Reconcile selected Orders |
-| `blend table` | Nothing | Emit the Vanilla Order table as HTML |
+| `blend table` | Nothing | Emit an Order table as HTML |
 
 Useful global flags:
 
