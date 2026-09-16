@@ -1,8 +1,23 @@
 name: Release-plz
 
 on:
-  # Enable the main-branch push trigger after establishing the standalone
-  # release baseline. Until then, an automatic run could re-release 0.2.16.
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "README.md"
+      - "docs/**"
+      - "justfile"
+      - ".github/install_template.sh"
+      - "release-plz.toml"
+      - "git-cliff.toml"
+      - ".github/workflows/release-plz.yml"
   workflow_dispatch:
 
 permissions:
