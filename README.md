@@ -36,8 +36,9 @@ brew install frantic1048/tap/blend
 
 ### Installer
 
-The current stable installer comes from the final Vanilla-hosted 0.2.x release.
-Starting with 0.3.0, release archives will be published from
+Blend 0.2.16 is the final release published from the Vanilla repository. This
+standalone repository owns the 0.3.x release line and later, with release
+archives published from
 [frantic1048/blend](https://github.com/frantic1048/blend/releases). The
 installer selects the requested platform archive, verifies its embedded SHA256
 checksum, and installs to `~/.local/bin` by default:
