@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/frantic1048/blend/compare/blend-v0.2.16...blend-v0.3.0) - 2026-09-17
+
+### Added
+- *(blend)* [**breaking**] establish standalone release line
+
+### Other
+- *(blend)* normalize standalone repository
+
 ## [0.2.16](https://github.com/frantic1048/Vanilla/compare/blend-v0.2.15...blend-v0.2.16) - 2026-09-15
 
 ### Other
