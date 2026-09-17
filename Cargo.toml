@@ -2,7 +2,7 @@
 name = "blend"
 version = "0.2.16"
 edition = "2024"
-authors = ["kafuuchino"]
+authors = ["frantic1048"]
 repository = "https://github.com/frantic1048/blend"
 
 [dependencies]
