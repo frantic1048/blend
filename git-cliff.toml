@@ -26,23 +26,6 @@ trim = true
 
 [git]
 tag_pattern = "blend-v[0-9].*"
-# Keep blend release notes scoped to shipped product files and user-facing docs.
-# CI workflows and release-tool configuration do not belong in the product
-# changelog. The release-plz workflow separately decides which config changes
-# should refresh an existing release PR.
-include_paths = [
-  "src/**",
-  "tests/**",
-  "docs/**",
-  "Cargo.toml",
-  "Cargo.lock",
-  "rust-toolchain.toml",
-  "README.md",
-  "Dockerfile",
-  ".dockerignore",
-  "justfile",
-  ".github/install_template.sh",
-]
 # Allow non-conventional commit messages to pass through to commit_parsers
 # so the catch-all parser can pick them up instead of silently dropping them.
 filter_unconventional = false
@@ -50,6 +33,12 @@ commit_preprocessors = [
   { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/frantic1048/blend/pull/${1}))" },
 ]
 commit_parsers = [
+  # Keep routine automation and dependency maintenance out of user-facing
+  # release notes. Use a footer for other intentionally invisible changes.
+  { footer = "^changelog: ?ignore", skip = true },
+  { message = "^ci(?:\\([^)]*\\))?[!:]", skip = true },
+  { message = "^chore\\(release\\)[!:]", skip = true },
+  { message = "^(?:build|chore)\\(deps(?:-dev)?\\)[!:]", skip = true },
   { message = "^feat", group = "added" },
   { message = "^changed", group = "changed" },
   { message = "^deprecated", group = "deprecated" },
