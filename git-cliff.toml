@@ -26,7 +26,10 @@ trim = true
 
 [git]
 tag_pattern = "blend-v[0-9].*"
-# Keep blend release notes scoped to the product plus release/build plumbing.
+# Keep blend release notes scoped to shipped product files and user-facing docs.
+# CI workflows and release-tool configuration do not belong in the product
+# changelog. The release-plz workflow separately decides which config changes
+# should refresh an existing release PR.
 include_paths = [
   "src/**",
   "tests/**",
@@ -38,12 +41,7 @@ include_paths = [
   "Dockerfile",
   ".dockerignore",
   "justfile",
-  "release-plz.toml",
-  "git-cliff.toml",
   ".github/install_template.sh",
-  ".github/workflows/blend-ci.yml",
-  ".github/workflows/release-plz.yml",
-  ".github/workflows/blend-v-release.yml",
 ]
 # Allow non-conventional commit messages to pass through to commit_parsers
 # so the catch-all parser can pick them up instead of silently dropping them.
