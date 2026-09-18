@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/frantic1048/blend/compare/blend-v0.3.0...blend-v0.3.1) - 2026-09-18
+
+### Other
+- remove implementation paths from generated contract
+
 ## [0.3.0](https://github.com/frantic1048/blend/compare/blend-v0.2.16...blend-v0.3.0) - 2026-09-17
 
 ### Added
