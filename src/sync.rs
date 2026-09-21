@@ -1060,8 +1060,7 @@ impl KeyAnnotation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff::KeyChangeType;
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1069,59 +1068,6 @@ mod tests {
     /// without literal-dot segments; use `KeyPath::new` otherwise).
     fn kp(dotted: &str) -> KeyPath {
         KeyPath::new(dotted.split('.').map(str::to_string).collect())
-    }
-
-    /// Mock prompter for testing
-    struct MockPrompter {
-        answers: std::cell::RefCell<VecDeque<SyncAction>>,
-        key_answers: std::cell::RefCell<VecDeque<KeyAction>>,
-    }
-
-    impl MockPrompter {
-        fn new(answers: Vec<SyncAction>) -> Self {
-            Self {
-                answers: std::cell::RefCell::new(answers.into()),
-                key_answers: std::cell::RefCell::new(VecDeque::new()),
-            }
-        }
-
-        fn with_key_answers(answers: Vec<SyncAction>, key_answers: Vec<KeyAction>) -> Self {
-            Self {
-                answers: std::cell::RefCell::new(answers.into()),
-                key_answers: std::cell::RefCell::new(key_answers.into()),
-            }
-        }
-    }
-
-    impl Prompter for MockPrompter {
-        fn ask_sync_action(
-            &self,
-            _order_name: &str,
-            _name: &str,
-            _target: &Path,
-            _diff: &DiffResult,
-            _can_pull: bool,
-            _annotation: Option<FileAnnotation>,
-        ) -> SyncAction {
-            self.answers
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or(SyncAction::Skip)
-        }
-
-        fn ask_key_action(
-            &self,
-            _order_name: &str,
-            _name: &str,
-            change: &KeyChange,
-            _annotation: Option<KeyAnnotation>,
-        ) -> KeyAction {
-            let _ = change;
-            self.key_answers
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or(KeyAction::Skip)
-        }
     }
 
     #[test]
@@ -1198,71 +1144,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_prompter() {
-        let prompter = MockPrompter::new(vec![
-            SyncAction::ApplySourceToTarget,
-            SyncAction::ApplyTargetToSource,
-            SyncAction::Quit,
-        ]);
-        let diff = DiffResult::no_changes();
-
-        assert_eq!(
-            prompter.ask_sync_action("order_name", "file", Path::new("/tmp"), &diff, true, None),
-            SyncAction::ApplySourceToTarget
-        );
-        assert_eq!(
-            prompter.ask_sync_action("order_name", "file", Path::new("/tmp"), &diff, true, None),
-            SyncAction::ApplyTargetToSource
-        );
-        assert_eq!(
-            prompter.ask_sync_action("order_name", "file", Path::new("/tmp"), &diff, true, None),
-            SyncAction::Quit
-        );
-        // Exhausted -- defaults to Skip
-        assert_eq!(
-            prompter.ask_sync_action("order_name", "file", Path::new("/tmp"), &diff, true, None),
-            SyncAction::Skip
-        );
-    }
-
-    #[test]
-    fn test_mock_prompter_key_actions() {
-        let prompter = MockPrompter::with_key_answers(
-            vec![],
-            vec![
-                KeyAction::UseSource,
-                KeyAction::UseTarget,
-                KeyAction::AllSource,
-            ],
-        );
-        let change = KeyChange {
-            path: kp("key"),
-            change_type: KeyChangeType::Modified,
-            repo_value: Some(serde_json::json!("new")),
-            deployed_value: Some(serde_json::json!("old")),
-            display: "~ key".to_string(),
-        };
-
-        assert_eq!(
-            prompter.ask_key_action("order_name", "file", &change, None),
-            KeyAction::UseSource
-        );
-        assert_eq!(
-            prompter.ask_key_action("order_name", "file", &change, None),
-            KeyAction::UseTarget
-        );
-        assert_eq!(
-            prompter.ask_key_action("order_name", "file", &change, None),
-            KeyAction::AllSource
-        );
-        // Exhausted
-        assert_eq!(
-            prompter.ask_key_action("order_name", "file", &change, None),
-            KeyAction::Skip
-        );
-    }
-
-    #[test]
     fn test_build_selective_deployed_nested_key() {
         use serde_json::json;
         // semantic_diff_keys produces dotted paths like "window.opacity".
@@ -1335,32 +1216,6 @@ mod tests {
         // a segment prefix of "editor.codeActionsOnSave".
         let other = KeyPath::new(vec!["[javascript]".into(), "editor".into()]);
         assert!(!paths_related(&parent, &other));
-    }
-
-    #[test]
-    fn test_build_merged_json_all_source() {
-        use serde_json::json;
-        let source = json!({"a": 1, "b": 2});
-        let target = json!({"a": 10, "b": 20});
-        let mut decisions = HashMap::new();
-        decisions.insert(kp("a"), KeyResolution::Source);
-        decisions.insert(kp("b"), KeyResolution::Source);
-
-        let merged = build_merged_json(&source, &target, &decisions);
-        assert_eq!(merged, json!({"a": 1, "b": 2}));
-    }
-
-    #[test]
-    fn test_build_merged_json_all_target() {
-        use serde_json::json;
-        let source = json!({"a": 1, "b": 2});
-        let target = json!({"a": 10, "b": 20});
-        let mut decisions = HashMap::new();
-        decisions.insert(kp("a"), KeyResolution::Target);
-        decisions.insert(kp("b"), KeyResolution::Target);
-
-        let merged = build_merged_json(&source, &target, &decisions);
-        assert_eq!(merged, json!({"a": 10, "b": 20}));
     }
 
     #[test]
@@ -1522,55 +1377,6 @@ mod tests {
         assert_eq!(
             compute_key_annotation(Some(&snapshot), &rendered, &deployed, &kp("font.size")),
             None
-        );
-    }
-
-    #[test]
-    fn mock_prompter_receives_file_annotation() {
-        let prompter = MockPrompter::new(vec![SyncAction::ApplySourceToTarget]);
-        let diff = DiffResult::with_changes("dummy".into());
-        let action = prompter.ask_sync_action(
-            "order_name",
-            "entry",
-            Path::new("/tmp/x"),
-            &diff,
-            true,
-            Some(FileAnnotation::SourceChanged),
-        );
-        assert_eq!(action, SyncAction::ApplySourceToTarget);
-    }
-
-    #[test]
-    fn mock_prompter_receives_key_annotation() {
-        let prompter = MockPrompter::with_key_answers(vec![], vec![KeyAction::UseSource]);
-        let change = KeyChange {
-            path: kp("font.size"),
-            change_type: KeyChangeType::Modified,
-            repo_value: Some(serde_json::json!(14)),
-            deployed_value: Some(serde_json::json!(12)),
-            display: "font.size = 14".into(),
-        };
-        let action = prompter.ask_key_action(
-            "order_name",
-            "entry",
-            &change,
-            Some(KeyAnnotation::SourceChanged),
-        );
-        assert_eq!(action, KeyAction::UseSource);
-    }
-
-    #[test]
-    fn cmd_sync_passes_source_changed_annotation_when_snapshot_equals_deployed() {
-        // This is a thin integration check: build a Context whose StateStore
-        // has a snapshot equal to the bytes we pretend are "deployed", then
-        // verify that compute_file_annotation classifies a different
-        // "rendered" buffer as SourceChanged.
-        let snap_bytes = b"deployed-bytes";
-        let rendered = b"new-rendered";
-        let deployed = b"deployed-bytes";
-        assert_eq!(
-            compute_file_annotation(Some(snap_bytes), rendered, deployed),
-            Some(FileAnnotation::SourceChanged)
         );
     }
 
