@@ -1,12 +1,12 @@
 use anyhow::{Context as AnyhowContext, bail};
 
 use crate::context::Context;
-use crate::nickel::{format_source, generated};
+use crate::nickel::{format_source, managed_files};
 use crate::output::log;
 
 /// Create command: scaffold a new empty order under orders/<order>.
 pub fn cmd_create(ctx: &Context, order: &str) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
     validate_order_name(order)?;
 
     let order_dir = ctx.orders_dir.join(order);

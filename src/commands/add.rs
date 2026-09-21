@@ -8,7 +8,7 @@ use crate::commands::create::{starter_source, validate_order_name};
 use crate::compose::{build_order, discover_orders};
 use crate::context::Context;
 use crate::nickel::{
-    NickelEvaluator, Order, format_source, generated, normalize_order_source_path,
+    NickelEvaluator, Order, format_source, managed_files, normalize_order_source_path,
 };
 use crate::output::log;
 
@@ -21,7 +21,7 @@ pub fn cmd_add(
     symlink: Option<SymlinkMode>,
     allow_overlap: bool,
 ) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
     validate_order_name(order)?;
 
     let order_dir = ctx.orders_dir.join(order);

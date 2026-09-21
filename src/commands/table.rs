@@ -1,11 +1,11 @@
 use crate::compose::{discover_orders, get_order};
 use crate::context::Context;
-use crate::nickel::generated;
+use crate::nickel::managed_files;
 use crate::output::log;
 
 /// Table command: output order info as HTML table for README
 pub fn cmd_table(ctx: &Context) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
     let orders = discover_orders(&ctx.orders_dir);
 

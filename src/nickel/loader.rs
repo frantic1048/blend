@@ -448,7 +448,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(
@@ -530,7 +530,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(
@@ -580,7 +580,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(
@@ -622,7 +622,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(
@@ -656,7 +656,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(
@@ -698,7 +698,7 @@ mod tests {
         let order_path = temp.path().join("order.ncl");
         std::fs::write(
             temp.path().join("order.contract.ncl"),
-            crate::nickel::generated::contract_ncl(),
+            crate::nickel::managed_files::contract_ncl(),
         )
         .unwrap();
         std::fs::write(

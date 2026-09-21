@@ -7,8 +7,8 @@ use crate::diff::{diff_configs_with_base, key_change_with_base_display, semantic
 use crate::formats::get_renderer;
 use crate::fs_node::node_kind;
 use crate::nickel;
-use crate::nickel::generated;
 use crate::nickel::key_path::KeyPath;
+use crate::nickel::managed_files;
 use crate::nickel::resolution::ResourceDisposition;
 use crate::output::log;
 use crate::sync::{self, KeyAction, KeyResolution, Prompter, SyncAction, SyncMode};
@@ -22,9 +22,9 @@ pub fn cmd_sync(
     prompter: &dyn Prompter,
 ) -> anyhow::Result<()> {
     if ctx.dry_run {
-        generated::assert_orders_ready(&ctx.orders_dir)?;
+        managed_files::assert_orders_ready(&ctx.orders_dir)?;
     } else {
-        generated::ensure_orders_ready(&ctx.orders_dir, false)?;
+        managed_files::ensure_orders_ready(&ctx.orders_dir, false)?;
     }
 
     let all_orders = discover_orders(&ctx.orders_dir);
