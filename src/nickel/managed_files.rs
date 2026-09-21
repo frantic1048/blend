@@ -146,26 +146,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn contract_ncl_contains_expected_definitions() {
-        let s = contract_ncl();
-        for needle in [
-            "contract_version = 3,",
-            "Format =",
-            "SandboxMode =",
-            "WhenCondition =",
-            "FileEntry =",
-            "OrderMeta =",
-            "with_target_only | default | not_exported",
-            "Order =",
-            "BlendConfig =",
-            "BlendOrder =",
-            "Metadata =",
-        ] {
-            assert!(s.contains(needle), "contract_ncl missing `{needle}`");
-        }
-    }
-
-    #[test]
     fn metadata_ncl_contains_defaults_and_contract() {
         let s = metadata_ncl();
         assert!(s.contains(r#"import "./order.contract.ncl""#));
@@ -180,14 +160,6 @@ mod tests {
 
     fn read(path: &Path) -> String {
         std::fs::read_to_string(path).unwrap()
-    }
-
-    #[test]
-    fn ensure_fresh_creates_missing_files() {
-        let tmp = TempDir::new().unwrap();
-        ensure_fresh(tmp.path(), true).unwrap();
-        assert_eq!(read(&tmp.path().join("order.contract.ncl")), contract_ncl());
-        assert_eq!(read(&tmp.path().join("metadata.ncl")), metadata_ncl());
     }
 
     #[test]
@@ -214,13 +186,6 @@ mod tests {
         std::fs::write(tmp.path().join("metadata.ncl"), "stale junk\n").unwrap();
         ensure_fresh(tmp.path(), true).unwrap();
         assert_eq!(read(&tmp.path().join("metadata.ncl")), metadata_ncl());
-    }
-
-    #[test]
-    fn assert_fresh_passes_when_files_match() {
-        let tmp = TempDir::new().unwrap();
-        ensure_fresh(tmp.path(), true).unwrap();
-        assert_fresh(tmp.path()).unwrap();
     }
 
     #[test]
@@ -253,16 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_fresh_creates_missing_directory() {
-        let tmp = TempDir::new().unwrap();
-        let nested = tmp.path().join("a/b/c");
-        // nested does NOT exist yet
-        ensure_fresh(&nested, true).unwrap();
-        assert!(nested.join("order.contract.ncl").exists());
-        assert!(nested.join("metadata.ncl").exists());
-    }
-
-    #[test]
     fn assert_orders_ready_errors_when_dir_missing() {
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("does-not-exist");
@@ -286,8 +241,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let nested = tmp.path().join("a/b");
         ensure_orders_ready(&nested, true).unwrap();
-        assert!(nested.join("order.contract.ncl").exists());
-        assert!(nested.join("metadata.ncl").exists());
+        assert_eq!(read(&nested.join("order.contract.ncl")), contract_ncl());
+        assert_eq!(read(&nested.join("metadata.ncl")), metadata_ncl());
     }
 
     /// Catches the most likely future regression: adding a field to

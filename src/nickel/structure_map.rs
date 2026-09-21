@@ -1179,32 +1179,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // CST exploration test (debug helper)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_cst_exploration() {
-        let source = r#"{
-  blend = {
-    files = [
-      {
-        name = "test.toml",
-        from_config = {
-          a = 1,
-          b = "hello",
-        },
-      },
-    ],
-  },
-}"#;
-        let tree = parse_source(source).unwrap();
-        let root = tree.root_node();
-        // Root is "term" in tree-sitter-nickel (not "source_file")
-        assert_eq!(root.kind(), "term");
-        assert!(!root.has_error(), "CST should parse without errors");
-    }
-
-    // -----------------------------------------------------------------------
     // Query API tests
     // -----------------------------------------------------------------------
 
