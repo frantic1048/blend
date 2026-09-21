@@ -2,12 +2,12 @@ use console::style;
 
 use crate::commands::helpers::select_orders;
 use crate::context::Context;
-use crate::nickel::{format_source, generated};
+use crate::nickel::{format_source, managed_files};
 use crate::output::log;
 
 /// Format command: format order.ncl files with Nickel's in-process formatter.
 pub fn cmd_format(ctx: &Context, orders: &[String], check: bool) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
     let selected = select_orders(ctx, orders);
     let mut visited = 0usize;

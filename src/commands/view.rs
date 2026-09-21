@@ -7,7 +7,7 @@ use crate::commands::helpers::{
 use crate::compose::{build_order, discover_orders};
 use crate::context::Context;
 use crate::fs_node::{NodeKind, node_kind};
-use crate::nickel::generated;
+use crate::nickel::managed_files;
 use crate::nickel::resolution::ResourceDisposition;
 use crate::output::log;
 
@@ -19,7 +19,7 @@ pub fn cmd_view(
     show_all: bool,
     short: bool,
 ) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
     let all_orders = discover_orders(&ctx.orders_dir);
     let viewing_specific = !orders.is_empty();

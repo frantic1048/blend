@@ -94,7 +94,7 @@ view, interactive sync, forced reconciliation, or failure
 | Command handlers | `src/commands/*.rs` |
 | Format dispatch and implementations | `src/formats.rs`, `src/formats/*.rs` |
 | Semantic and text diffing | `src/diff.rs`, `src/diff/*.rs` |
-| Nickel loading and generated modules | `src/nickel/loader.rs`, `src/nickel/generated.rs` |
+| Nickel loading and managed files | `src/nickel/loader.rs`, `src/nickel/managed_files.rs`, `src/nickel/assets/*.ncl` |
 | Resolution normalization result | `src/nickel/resolution.rs` |
 | Order schema | `src/nickel/schema.rs` |
 | Diagnostics and generated/original span mapping | `src/nickel/diagnostics.rs`, `src/nickel/source_map.rs` |
@@ -107,12 +107,13 @@ Rayon.
 
 ## Order loading and resolution
 
-### Generated contract and metadata
+### Managed contract and metadata
 
-`src/nickel/generated.rs` owns the generated `orders/order.contract.ncl` and
-`orders/metadata.ncl` content. Read commands check their freshness but must not
-repair them. `init` and `sync` may refresh compatible generated files; breaking
-contract changes are applied only by `init --upgrade`.
+`src/nickel/managed_files.rs` embeds the canonical Nickel assets for the
+generated `orders/order.contract.ncl` and `orders/metadata.ncl` files. Read
+commands check their freshness but must not repair them. `init` and `sync` may
+refresh compatible generated files; breaking contract changes are applied only by
+`init --upgrade`.
 
 The tracked metadata module supplies stable defaults for Nickel contracts and
 language tooling. `NickelEvaluator` recognizes the canonical

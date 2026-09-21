@@ -2,7 +2,7 @@ use console::style;
 
 use crate::commands::helpers::select_orders;
 use crate::context::Context;
-use crate::nickel::{NickelEvaluator, Order, generated};
+use crate::nickel::{NickelEvaluator, Order, managed_files};
 use crate::output::log;
 
 fn validate_order_semantics(
@@ -45,7 +45,7 @@ fn validate_order_semantics(
 
 /// Check command: typecheck and evaluate order.ncl files through Nickel.
 pub fn cmd_check(ctx: &Context, orders: &[String]) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
     let evaluator = NickelEvaluator::new(&ctx.metadata);
     let selected = select_orders(ctx, orders);

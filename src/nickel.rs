@@ -1,8 +1,8 @@
 pub mod ast_utils;
 mod diagnostics;
-pub mod generated;
 pub mod key_path;
 mod loader;
+pub mod managed_files;
 pub mod resolution;
 mod schema;
 mod source_map;

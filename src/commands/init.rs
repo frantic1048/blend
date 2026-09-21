@@ -4,7 +4,7 @@ use anyhow::{Context as AnyhowContext, bail};
 
 use crate::commands::sync::cmd_sync;
 use crate::context::Context;
-use crate::nickel::generated;
+use crate::nickel::managed_files;
 use crate::output::log;
 use crate::sync::{SyncMode, TerminalPrompter};
 
@@ -16,7 +16,7 @@ use crate::sync::{SyncMode, TerminalPrompter};
 /// When `upgrade` is true, breaking contract migrations are allowed.
 pub fn cmd_init(ctx: &Context, upgrade: bool) -> anyhow::Result<()> {
     if ctx.dry_run {
-        return generated::assert_orders_ready(&ctx.orders_dir);
+        return managed_files::assert_orders_ready(&ctx.orders_dir);
     }
 
     let should_create_starter = !starter_path(ctx).exists();
@@ -24,7 +24,7 @@ pub fn cmd_init(ctx: &Context, upgrade: bool) -> anyhow::Result<()> {
         ensure_scaffold_target_clean(ctx)?;
     }
 
-    generated::ensure_orders_ready(&ctx.orders_dir, upgrade)?;
+    managed_files::ensure_orders_ready(&ctx.orders_dir, upgrade)?;
 
     if should_create_starter {
         write_blend_starter(ctx)?;

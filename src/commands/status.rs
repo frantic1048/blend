@@ -6,13 +6,13 @@ use crate::compose::{discover_orders, get_order, resolve_file_entry};
 use crate::context::Context;
 use crate::diff::check_file_sync;
 use crate::fs_node::{NodeKind, node_kind};
-use crate::nickel::generated;
+use crate::nickel::managed_files;
 use crate::nickel::resolution::ResourceDisposition;
 use crate::output::log;
 
 /// Status command: show available orders and their state
 pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
-    generated::assert_orders_ready(&ctx.orders_dir)?;
+    managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
     let orders = discover_orders(&ctx.orders_dir);
     log::success(&format!("Found {} orders in orders/", orders.len()));
