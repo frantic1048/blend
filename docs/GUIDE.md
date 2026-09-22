@@ -52,7 +52,8 @@ blend add shell --prefix ~/.config/shell ~/.config/shell/config
 
 `--blend-dir` selects a Source root explicitly. Otherwise Blend searches the
 nearest ancestor containing `orders/`, then the Source root remembered in its
-per-machine state.
+per-machine state. When it falls back to remembered state, Blend reports the
+selected Source root on standard error.
 
 ## Writing an Order
 

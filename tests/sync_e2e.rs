@@ -3149,11 +3149,19 @@ fn test_commands_use_configured_blend_dir_outside_checkout() {
 
     let view_output = run_blend_in_cwd(home.path(), outside.path(), &["view"]);
     let stdout = String::from_utf8_lossy(&view_output.stdout);
+    let stderr = String::from_utf8_lossy(&view_output.stderr);
     assert!(
         view_output.status.success(),
         "blend view should use remembered blend dir state outside a checkout\nstdout: {}\nstderr: {}",
         stdout,
-        String::from_utf8_lossy(&view_output.stderr),
+        stderr,
+    );
+    assert!(
+        stderr.contains(&format!(
+            "Using remembered blend dir: {}",
+            blend_dir.path().canonicalize().unwrap().display()
+        )),
+        "blend should report the remembered blend dir on stderr\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stdout.contains("blend") && !stdout.contains("toml-basic"),

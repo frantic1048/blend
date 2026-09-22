@@ -11,6 +11,10 @@ pub mod log {
         println!("{}", msg);
     }
 
+    pub fn notice(msg: &str) {
+        eprintln!("{}", style(msg).dim());
+    }
+
     pub fn warn(msg: &str) {
         println!("{}", style(msg).yellow());
     }
