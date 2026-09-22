@@ -108,10 +108,7 @@ fn resolve_blend_dir(cli: &Cli, state: &StateStore) -> Result<BlendDirChoice> {
         }
 
         if let Some(remembered) = state.read_blend_dir()? {
-            return Ok(BlendDirChoice {
-                path: remembered,
-                update_config_after_success: false,
-            });
+            return Ok(choice_from_remembered_state(remembered));
         }
 
         return Ok(BlendDirChoice {
@@ -129,13 +126,21 @@ fn find_blend_dir(state: &StateStore) -> Result<BlendDirChoice> {
     }
 
     if let Some(remembered) = state.read_blend_dir()? {
-        return Ok(BlendDirChoice {
-            path: remembered,
-            update_config_after_success: false,
-        });
+        return Ok(choice_from_remembered_state(remembered));
     }
 
     bail!("Could not find blend directory. Run from a blend checkout or pass --blend-dir <PATH>.")
+}
+
+fn choice_from_remembered_state(remembered: PathBuf) -> BlendDirChoice {
+    log::notice(&format!(
+        "Using remembered blend dir: {}",
+        remembered.display()
+    ));
+    BlendDirChoice {
+        path: remembered,
+        update_config_after_success: false,
+    }
 }
 
 fn command_can_update_blend_dir_state(cli: &Cli) -> bool {
