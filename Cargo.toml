@@ -1,6 +1,6 @@
 [package]
 name = "blend"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 authors = ["frantic1048"]
 repository = "https://github.com/frantic1048/blend"

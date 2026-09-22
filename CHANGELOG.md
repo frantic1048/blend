@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/frantic1048/blend/compare/blend-v0.3.1...blend-v0.3.2) - 2026-09-22
+
+### Added
+- report remembered blend directory
+
+### Fixed
+- *(deps)* update all non-major dependencies
+- *(deps)* align Nickel dependency versions
+
+### Other
+- extract managed Nickel assets
+- prune low-value coverage
+
 ## [0.3.1](https://github.com/frantic1048/blend/compare/blend-v0.3.0...blend-v0.3.1) - 2026-09-18
 
 ### Other
