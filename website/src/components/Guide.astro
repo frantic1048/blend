@@ -1,0 +1,659 @@
+---
+const sourceTree = `dotfiles/
+└── orders/
+    ├── order.contract.ncl
+    ├── metadata.ncl
+    └── editor/
+        └── order.ncl`;
+
+const completeOrder = `let { Order, .. } = import "../order.contract.ncl" in
+let metadata = import "../metadata.ncl" in
+{
+  blend = {
+    prefix = ["~/.config/editor/"],
+    when = { os = ["darwin", "linux"] },
+
+    files = [
+      {
+        name = "settings.toml",
+        from_config = {
+          theme = "dark",
+          font_size =
+            if metadata.os == "darwin" then 14 else 12,
+        },
+      },
+      {
+        from_file = "snippets",
+        exclude = ["*.tmp"],
+        local = "snippets.local",
+      },
+    ],
+  },
+} | Order`;
+
+const authorityExample = `# Divergence remains interactive.
+theme = "dark",
+
+# Divergence is repaired automatically.
+theme = fun _ => "dark",
+
+# Exact ownership is stated directly.
+theme = 'Enforce "dark",`;
+
+const targetOnlyExample = `editor =
+  {
+    theme = "dark",
+  }
+  |> blend.with_target_only 'Unmanaged`;
+
+const targetOnlyResolver = `plugins =
+  {
+    foo = "enabled",
+  }
+  |> blend.with_target_only (
+    fun { key, value } =>
+      match key {
+        "legacy_plugin" => 'Absent,
+        "runtime_plugin" => 'Unmanaged,
+        "optional_plugin" => value,
+        _ => 'Unresolved,
+      }
+  )`;
+
+const targetOnlyAbsent = `plugins =
+  { foo = "enabled" }
+  |> blend.with_target_only 'Absent`;
+
+const symlinkExample = `files = [{
+  name = "van",
+  from_file = "bin",
+  symlink = true,
+}]`;
+
+const immutableExample = `files = [{
+  from_file = ".bashrc",
+  immutable = true,
+}]`;
+
+const defaultExample = `timeout =
+  fun { target } =>
+    if target == 'Absent then 30 else target`;
+
+const migrateExample = `mode =
+  fun { target } =>
+    match target {
+      "legacy" => "modern",
+      "modern" => target,
+      _ => 'Unresolved,
+    }`;
+
+const assertExample = `auth_token = 'Assert 'Absent,
+
+PermitRootLogin =
+  'Assert fun { target } => target != "yes",`;
+
+const ownExample = `config =
+  { cli_auth_credentials_store = 'Enforce "keyring" }
+  |> blend.with_target_only 'Unmanaged`;
+
+const modeRows = [
+  ["from_file", "A literal file or directory beside the Order", "Copy or intentional symlink", "Naturally reversible"],
+  ["from_config", "Nickel values and resolver functions", "Rendered configuration", "Rewrites concrete leaves where safe"],
+];
+
+const orderRows = [
+  ["files", "Order", "File entries managed by the Order"],
+  ["prefix", "Order or entry", "Target prefixes; an entry value replaces the Order default"],
+  ["when", "Order or entry", "Optional os, arch, and hostname filters"],
+  ["name", "Entry", "Target name; required for from_config and inferred from from_file when omitted"],
+  ["from_config", "Entry", "Structured Nickel rendered to the selected format"],
+  ["from_file", "Entry", "Relative Source file or directory copied to the Target"],
+  ["format", "Entry", "Explicit format when extension inference is insufficient"],
+  ["symlink", "from_file", "Deploy an intentional symlink instead of copying"],
+  ["exclude", "Directory", "Glob patterns omitted from the merged Source view"],
+  ["local", "Directory", "Machine-local overlay merged over tracked Source"],
+  ["immutable", "Entry", "Apply the platform immutable flag after deployment"],
+  ["ignore", "Order or entry", "Legacy diff filtering; prefer resolution primitives for new structured Orders"],
+];
+
+const metadataRows = [
+  ["metadata.os", '"darwin", "linux"'],
+  ["metadata.arch", '"aarch64", "x86_64"'],
+  ["metadata.hostname", "Current hostname"],
+  ["metadata.user", "Current user"],
+  ["metadata.home", "Current home or --home override"],
+  ["metadata.desktop", "Desktop session when available"],
+];
+
+const formatRows = [
+  ["toml", "Record, array, or scalars", "Semantic"],
+  ["json", "JSON-compatible value", "Semantic; Target parsing may accept JSONC"],
+  ["jsonc", "JSON-compatible value", "Semantic; generated output does not preserve comments"],
+  ["yaml", "JSON-compatible value", "Semantic YAML 1.2"],
+  ["space_pair_lines", "Array of [key, value] pairs", "Text"],
+  ["space_record_lines", "Record rendered as key value", "Semantic record"],
+  ["equals_record_lines", "Record rendered as key=value", "Semantic record"],
+  ["plaintext", "String or literal from_file content", "Text"],
+];
+
+const resolutionRows = [
+  ["Ordinary value", "Leave a difference unresolved for interactive choice"],
+  ["Resolver returning a scalar", "Enforce that exact value"],
+  ["Resolver returning a record", "Recurse through the returned structure"],
+  ["'Enforce value", "Enforce the exact whole value"],
+  ["'Absent", "Remove the field or resource"],
+  ["'Assert expected", "Require a match and fail without repairing"],
+  ["'Assert fun { target } => …", "Require the predicate to hold"],
+  ["'Unmanaged", "Exclude from ownership, reconciliation, and prompts"],
+  ["'Unresolved", "Explicitly fall back to interactive or manual handling"],
+  ["blend.with_target_only policy", "Handle Target children absent from Source"],
+];
+
+const commandRows = [
+  ["blend / blend status", "Nothing", "Summarize Order and Target state"],
+  ["blend view [orders…]", "Nothing", "Preview generated content and differences"],
+  ["blend check [orders…]", "Nothing", "Validate contracts, evaluation, and resolution"],
+  ["blend create <order>", "Source", "Scaffold an Order"],
+  ["blend add <order> <target>", "Source", "Import a Target as literal Source"],
+  ["blend format [orders…]", "Source", "Format order.ncl files; --check is read-only"],
+  ["blend init", "Source and config", "Initialize or refresh generated modules"],
+  ["blend sync [orders…]", "Source, Target, state", "Reconcile selected Orders"],
+  ["blend table", "Nothing", "Emit an Order table as HTML"],
+];
+---
+
+<section class="guide" id="guide" aria-labelledby="guide-title">
+  <header class="guide-hero">
+    <p class="section-kicker">The complete user guide</p>
+    <h2 id="guide-title">From first install to a calm daily workflow.</h2>
+    <p>
+      Everything needed to start using Blend lives on this page. Follow it in
+      order for a first setup, or use the index to return to a specific part of
+      the model.
+    </p>
+  </header>
+
+  <div class="guide-layout">
+    <aside class="guide-index">
+      <p>On this page</p>
+      <nav aria-label="User guide sections">
+        <a href="#quick-start"><span>01</span> Quick start</a>
+        <a href="#mental-model"><span>02</span> Mental model</a>
+        <a href="#source-layout"><span>03</span> Source layout</a>
+        <a href="#writing-orders"><span>04</span> Writing Orders</a>
+        <a href="#formats"><span>05</span> Formats</a>
+        <a href="#resolution"><span>06</span> Resolution</a>
+        <a href="#workflow"><span>07</span> Daily workflow</a>
+        <a href="#safety"><span>08</span> Safety and state</a>
+        <a href="#upgrades"><span>09</span> Upgrades and help</a>
+      </nav>
+    </aside>
+
+    <div class="guide-content">
+      <section class="guide-chapter" id="quick-start" aria-labelledby="quick-start-title">
+        <p class="chapter-number">01 · Quick start</p>
+        <h3 id="quick-start-title">Make a Source, then bring one real file home.</h3>
+        <p class="chapter-lede">
+          Install Blend with Homebrew, create a directory for the configuration
+          you want to manage, and initialize it as a Blend Source.
+        </p>
+
+        <div class="terminal" aria-label="Install and initialize Blend">
+          <div class="terminal-top"><span></span><span></span><span></span><small>terminal</small></div>
+          <pre><code><span class="prompt">$</span> brew install frantic1048/tap/blend
+<span class="prompt">$</span> mkdir dotfiles && cd dotfiles
+<span class="prompt">$</span> blend init</code></pre>
+        </div>
+
+        <details class="reference-block install-paths">
+          <summary>Installer, container, and source alternatives</summary>
+          <div class="install-grid">
+            <article>
+              <p class="mini-label">Release installer</p>
+              <pre><code>curl -fsSLO https://github.com/frantic1048/blend/releases/latest/download/blend-installer.sh
+sh blend-installer.sh</code></pre>
+              <p>Verifies the release checksum and installs to <code>~/.local/bin</code> by default.</p>
+            </article>
+            <article>
+              <p class="mini-label">Container</p>
+              <pre><code>docker run --rm \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/frantic1048/blend:latest check</code></pre>
+              <p>The image entrypoint is <code>blend</code>.</p>
+            </article>
+            <article>
+              <p class="mini-label">From source</p>
+              <pre><code>git clone https://github.com/frantic1048/blend.git
+cd blend
+cargo build --release</code></pre>
+              <p>The binary is written to <code>target/release/blend</code>.</p>
+            </article>
+          </div>
+          <p class="fine-print">
+            Release archives support Apple silicon macOS, Intel macOS, and x86-64 GNU/Linux.
+          </p>
+        </details>
+
+        <p>
+          <code>blend init</code> creates the generated Order contract, runtime metadata
+          defaults, and a starter Blend configuration. Import an existing file
+          or directory as faithful literal Source:
+        </p>
+
+        <pre class="guide-code"><code>blend add git ~/.config/git</code></pre>
+
+        <p>
+          Or scaffold an Order for structured configuration that Blend can
+          compare semantically:
+        </p>
+
+        <pre class="guide-code"><code>blend create editor</code></pre>
+
+        <div class="workflow-strip" aria-label="First Blend workflow">
+          <div><code>blend check</code><span>Validate the declaration</span></div>
+          <div><code>blend view</code><span>Preview the difference</span></div>
+          <div><code>blend sync</code><span>Choose and reconcile</span></div>
+        </div>
+
+        <div class="note note-warm">
+          <strong>Nothing is deployed by the read commands.</strong>
+          <span>Running <code>blend</code> defaults to status. <code>view</code> and <code>check</code> also make no changes.</span>
+        </div>
+      </section>
+
+      <section class="guide-chapter" id="mental-model" aria-labelledby="mental-model-title">
+        <p class="chapter-number">02 · Mental model</p>
+        <h3 id="mental-model-title">Three names explain almost everything.</h3>
+        <div class="definition-grid">
+          <article>
+            <span>S</span>
+            <h4>Source</h4>
+            <p>Your Blend checkout: Orders plus the files stored beside them.</p>
+          </article>
+          <article>
+            <span>O</span>
+            <h4>Order</h4>
+            <p>A declaration of which Source entries produce which Targets and when.</p>
+          </article>
+          <article>
+            <span>T</span>
+            <h4>Target</h4>
+            <p>The deployed path an application reads, usually somewhere below <code>~</code>.</p>
+          </article>
+        </div>
+
+        <p>
+          Blend compares rendered Source with the observed Target. The Order can
+          settle a difference automatically, leave it for an interactive choice,
+          assert that a safety condition holds, or keep application-owned state
+          outside Blend ownership.
+        </p>
+
+        <h4>Choose a Source mode per entry</h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Mode</th><th>Source</th><th>Deployment</th><th>Reverse sync</th></tr></thead>
+            <tbody>
+              {modeRows.map(([mode, source, deployment, reverse]) => (
+                <tr><th><code>{mode}</code></th><td>{source}</td><td>{deployment}</td><td>{reverse}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p class="fine-print">
+          Use <code>from_config</code> when structure, conditions, or semantic reconciliation
+          matter. Use <code>from_file</code> when byte-level fidelity or frequent application
+          rewrites matter more.
+        </p>
+      </section>
+
+      <section class="guide-chapter" id="source-layout" aria-labelledby="source-layout-title">
+        <p class="chapter-number">03 · Source layout</p>
+        <h3 id="source-layout-title">A small directory with an explicit center.</h3>
+        <div class="split-example">
+          <div>
+            <p>
+              Every Source has an <code>orders/</code> directory. Generated modules describe
+              the public Order contract and runtime metadata; each named directory
+              contains one Order and any literal Source it needs.
+            </p>
+            <p>
+              <code>blend create &lt;order&gt;</code> scaffolds a new Order. <code>blend add</code> imports
+              an absolute or <code>~</code>-prefixed Target as literal Source.
+            </p>
+          </div>
+          <pre class="guide-code"><code>{sourceTree}</code></pre>
+        </div>
+
+        <pre class="guide-code"><code>blend add shell --prefix ~/.config/shell ~/.config/shell/config</code></pre>
+
+        <h4>How Blend selects a Source</h4>
+        <ol class="steps-list">
+          <li><span>1</span><p>Use <code>--blend-dir &lt;path&gt;</code> when supplied.</p></li>
+          <li><span>2</span><p>Otherwise search the current directory and its ancestors for <code>orders/</code>.</p></li>
+          <li><span>3</span><p>Finally use the Source remembered in per-machine state, and report that choice on standard error.</p></li>
+        </ol>
+      </section>
+
+      <section class="guide-chapter" id="writing-orders" aria-labelledby="writing-orders-title">
+        <p class="chapter-number">04 · Writing Orders</p>
+        <h3 id="writing-orders-title">Compose structured and literal configuration together.</h3>
+        <p>
+          A structured Order imports the generated contract. Import metadata in
+          its canonical form when platform, architecture, user, or host should
+          influence the configuration.
+        </p>
+
+        <pre class="guide-code guide-code-large"><code>{completeOrder}</code></pre>
+
+        <p>
+          An Order may contain many entries and one entry may deploy to multiple
+          prefixes. Entry-level prefixes replace the Order default.
+        </p>
+
+        <details class="reference-block" open>
+          <summary>Order fields</summary>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Applies to</th><th>Meaning</th></tr></thead>
+              <tbody>
+                {orderRows.map(([field, applies, meaning]) => (
+                  <tr><th><code>{field}</code></th><td>{applies}</td><td>{meaning}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class="fine-print">
+            <code>from_file</code> and <code>local</code> paths are relative to the Order directory and
+            may not normalize outside it. Every entry needs an effective Target prefix.
+          </p>
+        </details>
+
+        <details class="reference-block">
+          <summary>Runtime metadata</summary>
+          <p>
+            Blend replaces the generated defaults with actual runtime values while
+            evaluating the canonical <code>import "../metadata.ncl"</code> form.
+          </p>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead><tr><th>Field</th><th>Typical values</th></tr></thead>
+              <tbody>
+                {metadataRows.map(([field, values]) => (
+                  <tr><th><code>{field}</code></th><td>{values}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <div class="pattern-grid">
+          <article>
+            <p class="mini-label">Intentional symlink</p>
+            <pre><code>{symlinkExample}</code></pre>
+            <p>Edit through the Target and you edit canonical Source directly.</p>
+          </article>
+          <article>
+            <p class="mini-label">Protected deployment</p>
+            <pre><code>{immutableExample}</code></pre>
+            <p>Blend clears the platform flag before replacement and reapplies it afterward.</p>
+          </article>
+        </div>
+        <p class="fine-print">
+          <code>immutable</code> may protect copied or rendered content, but is not applied to symlink entries.
+          Unsupported permissions or filesystems are reported as warnings.
+        </p>
+      </section>
+
+      <section class="guide-chapter" id="formats" aria-labelledby="formats-title">
+        <p class="chapter-number">05 · Formats</p>
+        <h3 id="formats-title">Compare configuration by meaning whenever possible.</h3>
+        <p>
+          Blend infers TOML, JSON, JSONC, and YAML from the Target extension.
+          Other names default to plaintext unless the Order selects a format.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Format</th><th>Source shape</th><th>Comparison</th></tr></thead>
+            <tbody>
+              {formatRows.map(([format, shape, comparison]) => (
+                <tr><th><code>{format}</code></th><td>{shape}</td><td>{comparison}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <details class="reference-block">
+          <summary>The deterministic YAML contract</summary>
+          <ul class="prose-list">
+            <li>YAML 1.2 Core Schema, exactly one document, and string mapping keys.</li>
+            <li>Null, booleans, strings, arrays, objects, and finite JSON-compatible numbers.</li>
+            <li>Anchors, aliases, and merge keys may be read and are expanded; they are never emitted.</li>
+            <li>Unsupported tags, duplicate keys, cycles, undefined aliases, multiple documents, and non-finite numbers fail.</li>
+            <li>Rendering uses stable block style, two-space indentation, sorted keys, LF endings, and one final newline.</li>
+            <li>Comments, quotes, scalar styles, directives, aliases, and input key order are not presentation-round-tripped.</li>
+          </ul>
+          <div class="note">
+            <strong>Supported values round-trip semantically.</strong>
+            <span><code>parse(render(value)) == value</code>. A parse failure never becomes an empty configuration or silent no-op.</span>
+          </div>
+        </details>
+      </section>
+
+      <section class="guide-chapter" id="resolution" aria-labelledby="resolution-title">
+        <p class="chapter-number">06 · Declaration and resolution</p>
+        <h3 id="resolution-title">Say exactly how much authority a value carries.</h3>
+        <p class="chapter-lede">
+          Every declared Source field participates, but an ordinary literal does
+          not silently win. When it differs from Target, Blend asks which side is
+          right unless the declaration provides a stronger policy.
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Authored form</th><th>When it is not satisfied</th></tr></thead>
+            <tbody>
+              {resolutionRows.map(([form, meaning]) => (
+                <tr><th><code>{form}</code></th><td>{meaning}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="split-example split-example-code">
+          <div>
+            <h4>The same value, three kinds of authority</h4>
+            <p>
+              Resolver functions occupy the declaration position and observe
+              <code>&#123; target &#125;</code>. A branch that declines to decide returns <code>'Unresolved</code>.
+            </p>
+          </div>
+          <pre class="guide-code"><code>{authorityExample}</code></pre>
+        </div>
+
+        <h4>Recursive values and exactness</h4>
+        <p>
+          A resolver returning a record creates a sparse recursive semantic tree:
+          ordinary children remain interactive and nested resolvers control their
+          own results. Use <code>'Enforce &#123; … &#125;</code> when the entire node and exact structure
+          are owned. <code>null</code> is a present value; <code>'Absent</code> is the structural sentinel
+          for non-existence.
+        </p>
+
+        <h4>Target-only children</h4>
+        <p>
+          A Target-only child has no Source field on which to attach a policy.
+          <code>blend.with_target_only</code> supplies one for the surrounding record.
+        </p>
+        <pre class="guide-code"><code>{targetOnlyExample}</code></pre>
+        <p>
+          A constant policy applies to every unexpected child. Use a resolver when
+          the choice depends on the child's key or observed value:
+        </p>
+        <pre class="guide-code"><code>{targetOnlyAbsent}</code></pre>
+        <p>
+          Here every unexpected child is removed. A resolver can instead make the
+          choice from the child's key and value:
+        </p>
+        <pre class="guide-code guide-code-large"><code>{targetOnlyResolver}</code></pre>
+        <p class="fine-print">
+          Returning <code>value</code> adopts the observed child as an actionable exact value.
+        </p>
+
+        <h4>Common composition patterns</h4>
+        <div class="recipe-list">
+          <article>
+            <div><span>Default</span><h5>Supply a value only when missing</h5></div>
+            <pre><code>{defaultExample}</code></pre>
+          </article>
+          <article>
+            <div><span>Migrate</span><h5>Recognize known states, leave the rest</h5></div>
+            <pre><code>{migrateExample}</code></pre>
+          </article>
+          <article>
+            <div><span>Assert</span><h5>Verify without silently repairing</h5></div>
+            <pre><code>{assertExample}</code></pre>
+          </article>
+          <article>
+            <div><span>Own</span><h5>Manage one field, preserve the rest</h5></div>
+            <pre><code>{ownExample}</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="guide-chapter" id="workflow" aria-labelledby="workflow-title">
+        <p class="chapter-number">07 · Daily workflow</p>
+        <h3 id="workflow-title">Inspect first. Reconcile when the story is clear.</h3>
+        <div class="table-wrap command-table">
+          <table>
+            <thead><tr><th>Command</th><th>Writes</th><th>Purpose</th></tr></thead>
+            <tbody>
+              {commandRows.map(([command, writes, purpose]) => (
+                <tr><th><code>{command}</code></th><td>{writes}</td><td>{purpose}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="option-grid">
+          <article><code>--dry-run / -n</code><p>Prevent command writes and report command-specific prospective work.</p></article>
+          <article><code>--verbose / -v</code><p>Report selected paths and runtime metadata.</p></article>
+          <article><code>--home &lt;path&gt;</code><p>Change Target <code>~</code> expansion and <code>metadata.home</code>.</p></article>
+          <article><code>--blend-dir &lt;path&gt;</code><p>Select the Source root explicitly.</p></article>
+          <article><code>--sandbox force|prefer|never</code><p>Choose how process sandbox installation is handled.</p></article>
+        </div>
+        <p class="fine-print">
+          Dry-run output is command-specific. Sync, add, and create describe
+          prospective work; format lists files that would change; init only checks
+          generated-file freshness and does not preview replacement content.
+        </p>
+
+        <h4>Viewing and syncing</h4>
+        <p>
+          <code>blend view --content-only</code> shows generated content, <code>--all</code> includes
+          content and diff, and <code>--short</code> omits up-to-date entries. During sync,
+          choose Source, Target, skip, or quit; structured differences can be
+          decided per key.
+        </p>
+        <pre class="guide-code"><code>blend sync --dry-run
+blend sync --force-source-to-target
+blend sync --force-target-to-source</code></pre>
+        <p>
+          Use <code>--no-rewrite</code> to prevent Target-to-Source Nickel edits and keep
+          manual merge behavior.
+        </p>
+
+        <h4>Snapshots and reverse sync</h4>
+        <p>
+          After confirmed deployment, Blend stores a Target snapshot as a Base.
+          Base matching Target means Source changed; Base matching Source means
+          Target changed; three different values reveal a real conflict.
+        </p>
+        <div class="note">
+          <strong>Reverse sync is intentionally selective.</strong>
+          <span>
+            Literal <code>from_file</code> content is naturally reversible. For <code>from_config</code>,
+            Blend rewrites concrete leaves—including active metadata-driven branches—and
+            supported structural edits; computed
+            expressions, resolver logic, and ambiguous structure require a manual declaration edit.
+          </span>
+        </div>
+      </section>
+
+      <section class="guide-chapter" id="safety" aria-labelledby="safety-title">
+        <p class="chapter-number">08 · Safety and state</p>
+        <h3 id="safety-title">Boundaries stay visible, even when automation is confident.</h3>
+        <div class="safety-grid">
+          <article>
+            <h4>Filesystem nodes</h4>
+            <p>
+              Blend distinguishes node type from content and never follows an
+              unexpected Target symlink for adoption. Replacing a managed node
+              requires an explicit Source choice or force operation; symlinked
+              parent directories remain untouched.
+            </p>
+          </article>
+          <article>
+            <h4>Process sandbox</h4>
+            <p>
+              Linux uses seccomp and macOS uses Seatbelt to deny later process
+              execution and socket communication. This is hardening, not a full
+              filesystem allowlist. <code>prefer</code> is the default mode.
+            </p>
+          </article>
+          <article>
+            <h4>Per-machine state</h4>
+            <p>
+              State lives below <code>$XDG_STATE_HOME/blend/</code>, falling back to
+              <code>$HOME/.local/state/blend/</code>. <code>state.json</code> remembers Source and
+              <code>snapshots/</code> stores reconciliation bases. Read commands do not refresh it.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="guide-chapter" id="upgrades" aria-labelledby="upgrades-title">
+        <p class="chapter-number">09 · Upgrades and troubleshooting</p>
+        <h3 id="upgrades-title">Generated files are replaceable; your intent is not.</h3>
+        <p>
+          <code>orders/order.contract.ncl</code> and <code>orders/metadata.ncl</code> are generated.
+          <code>blend init</code> and successful syncs refresh compatible versions. For a
+          breaking contract migration, run:
+        </p>
+        <pre class="guide-code"><code>blend init --upgrade</code></pre>
+        <p>
+          Contract version 3 reserves <code>'Absent</code>, <code>'Assert</code>, <code>'Unmanaged</code>,
+          <code>'Unresolved</code>, and <code>'Enforce</code>. Review older configuration that used
+          those enum tags as ordinary data before upgrading.
+        </p>
+
+        <h4>A dependable diagnostic order</h4>
+        <ol class="troubleshooting-list">
+          <li><code>blend check &lt;order&gt;</code><span>Find contract, Nickel, or resolver failures first.</span></li>
+          <li><code>blend view --all &lt;order&gt;</code><span>Inspect generated content and the complete diff.</span></li>
+          <li><code>blend --verbose</code><span>Confirm Source selection, Target paths, and runtime metadata.</span></li>
+          <li><code>blend sync --dry-run</code><span>Preview a force operation when its Targets are not obvious.</span></li>
+        </ol>
+        <ul class="prose-list">
+          <li>If reverse sync cannot rewrite a field, edit the declaration manually; <code>'Unresolved</code> never synthesizes resolver logic.</li>
+          <li>Treat YAML parse failures as real input errors. Repair the Target or deploy a known-good Source.</li>
+          <li>Use sandbox mode <code>force</code> when failure to install hardening must abort, and <code>never</code> only when deliberately disabling it.</li>
+        </ul>
+      </section>
+
+      <section class="guide-finish" aria-labelledby="guide-finish-title">
+        <p class="section-kicker">Ready when you are</p>
+        <h3 id="guide-finish-title">Start with one file. Let the model earn your trust.</h3>
+        <p>
+          Import something real, preview every difference, and grow the Source
+          as its ownership becomes clear.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#quick-start">Return to quick start</a>
+          <a class="button button-secondary" href="https://github.com/frantic1048/blend">Browse the repository</a>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
