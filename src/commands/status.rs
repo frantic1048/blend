@@ -1,8 +1,8 @@
 use console::style;
 use rayon::prelude::*;
 
-use crate::commands::helpers::compute_managed_dir_diffs;
-use crate::compose::{discover_orders, get_order, resolve_file_entry};
+use crate::commands::helpers::compute_managed_dir_diffs_with_mode;
+use crate::compose::{discover_orders, file_mode_mismatch, get_order, resolve_file_entry};
 use crate::context::Context;
 use crate::diff::check_file_sync;
 use crate::fs_node::{NodeKind, node_kind};
@@ -273,12 +273,13 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                         .map(|local| order_dir.join(local));
                                     let mut ignore_keys = order.global_ignore().to_vec();
                                     ignore_keys.extend(file_entry.ignore.iter().cloned());
-                                    compute_managed_dir_diffs(
+                                    compute_managed_dir_diffs_with_mode(
                                         &source_dir,
                                         &target,
                                         local_dir.as_deref(),
                                         &file_entry.exclude,
                                         &ignore_keys,
+                                        file_entry.parsed_mode().ok().flatten(),
                                     )
                                     .map(Some)
                                 };
@@ -335,6 +336,14 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                             .map_err(anyhow::Error::from)
                                         }
                                     };
+                                    let sync = sync.and_then(|content_sync| {
+                                        let Some(expected) = file_entry.parsed_mode()? else {
+                                            return Ok(content_sync);
+                                        };
+                                        let mode_sync =
+                                            file_mode_mismatch(&target, expected)?.is_none();
+                                        Ok(content_sync.map(|content| content && mode_sync))
+                                    });
                                     let diff_col = match sync {
                                         Ok(Some(true)) => style(format!("{:<diff_w$}", "\u{2713}"))
                                             .green()

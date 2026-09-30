@@ -1,6 +1,7 @@
-use crate::commands::helpers::{compute_diff_for_result, result_has_type_mismatch};
+use crate::commands::helpers::{compute_content_diff_for_result, result_has_type_mismatch};
 use crate::compose::{
-    self, BuildResult, build_glob_set, collect_merged_files, discover_orders, write_result,
+    self, BuildResult, build_glob_set, collect_merged_files, discover_orders, mode_mismatches,
+    reconcile_file_mode, write_result,
 };
 use crate::context::Context;
 use crate::diff::{diff_configs_with_base, key_change_with_base_display, semantic_diff_keys};
@@ -74,6 +75,7 @@ pub fn cmd_sync(
     let mut source_to_target = 0;
     let mut target_to_source = 0;
     let mut skipped = 0;
+    let mut deferred_modes = Vec::new();
 
     for (order_name, results) in &built {
         for (result, file_entry_index) in results {
@@ -197,8 +199,38 @@ pub fn cmd_sync(
                 continue;
             }
 
-            // Compute diff
-            let diff_result = match compute_diff_for_result(result) {
+            // Repair readable declared modes before comparing content. Modes
+            // that remove owner read access wait until all content operations
+            // (including Target -> Source reads) have completed.
+            let defer_mode = result.mode.is_some_and(|mode| mode & 0o400 == 0);
+            let mode_reconciled = match if defer_mode {
+                mode_mismatches(result).map(|mismatches| !mismatches.is_empty())
+            } else {
+                reconcile_file_mode(result, ctx.dry_run)
+            } {
+                Ok(changed) => {
+                    if changed && defer_mode {
+                        deferred_modes.push((order_name.as_str(), result));
+                    } else if changed && !ctx.dry_run {
+                        log::success(&format!(
+                            "Applied declared file mode for {}:{}",
+                            order_name, result.name
+                        ));
+                        source_to_target += 1;
+                    }
+                    changed
+                }
+                Err(error) => {
+                    log::error(&format!(
+                        "Failed to reconcile file mode for {}:{}: {}",
+                        order_name, result.name, error
+                    ));
+                    build_errors += 1;
+                    continue;
+                }
+            };
+
+            let diff_result = match compute_content_diff_for_result(result) {
                 Ok(diff) => diff,
                 Err(error) => {
                     log::error(&format!(
@@ -449,6 +481,12 @@ pub fn cmd_sync(
                 }
 
                 if quit {
+                    finish_deferred_modes(
+                        &deferred_modes,
+                        ctx.dry_run,
+                        &mut source_to_target,
+                        &mut build_errors,
+                    );
                     log::info("Sync aborted by user");
                     if build_errors > 0 {
                         anyhow::bail!("sync failed with {build_errors} error(s)");
@@ -556,13 +594,16 @@ pub fn cmd_sync(
                             exclude_patterns: vec![],
                             local_dir: None,
                             immutable: result.immutable,
+                            mode: result.mode,
                             automatic_source_paths: std::collections::HashSet::new(),
                             manual_resolution_paths: std::collections::HashSet::new(),
                             resource_disposition: ResourceDisposition::Present,
                         };
                         match write_result(&merged_result, false) {
                             Ok(()) => {
-                                source_to_target += 1;
+                                if !mode_reconciled {
+                                    source_to_target += 1;
+                                }
                                 refresh_snapshot_for_result(ctx, order_name, &merged_result);
                                 log::success(&format!(
                                     "Synced {}:{} ({} keys resolved)",
@@ -678,7 +719,9 @@ pub fn cmd_sync(
                                     "Applied Source -> Target for {}:{}",
                                     order_name, result.name
                                 ));
-                                source_to_target += 1;
+                                if !mode_reconciled {
+                                    source_to_target += 1;
+                                }
                                 refresh_snapshot_for_result(ctx, order_name, result);
                             }
                         }
@@ -775,6 +818,12 @@ pub fn cmd_sync(
                         skipped += 1;
                     }
                     SyncAction::Quit => {
+                        finish_deferred_modes(
+                            &deferred_modes,
+                            ctx.dry_run,
+                            &mut source_to_target,
+                            &mut build_errors,
+                        );
                         log::info("Sync aborted by user");
                         if build_errors > 0 {
                             anyhow::bail!("sync failed with {build_errors} error(s)");
@@ -786,6 +835,12 @@ pub fn cmd_sync(
         }
     }
 
+    finish_deferred_modes(
+        &deferred_modes,
+        ctx.dry_run,
+        &mut source_to_target,
+        &mut build_errors,
+    );
     if build_errors > 0 {
         anyhow::bail!("sync failed with {build_errors} error(s)");
     }
@@ -799,6 +854,33 @@ pub fn cmd_sync(
     }
 
     Ok(())
+}
+
+fn finish_deferred_modes(
+    entries: &[(&str, &BuildResult)],
+    dry_run: bool,
+    source_to_target: &mut usize,
+    errors: &mut usize,
+) {
+    for (order, result) in entries {
+        match reconcile_file_mode(result, dry_run) {
+            Ok(_) if !dry_run => {
+                *source_to_target += 1;
+                log::success(&format!(
+                    "Applied declared file mode for {}:{}",
+                    order, result.name
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                *errors += 1;
+                log::error(&format!(
+                    "Failed to reconcile file mode for {}:{}: {}",
+                    order, result.name, error
+                ));
+            }
+        }
+    }
 }
 
 fn compute_diff_with_base_for_result(

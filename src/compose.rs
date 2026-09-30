@@ -1,5 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use anyhow::{Context as AnyhowContext, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -79,6 +85,8 @@ pub struct BuildResult {
     pub local_dir: Option<PathBuf>,
     /// Whether to set the OS immutable flag on the deployed file
     pub immutable: bool,
+    /// Unix permission mode enforced on managed regular target files.
+    pub mode: Option<u32>,
     /// Structured paths whose declarations are authoritative and can be
     /// reconciled without prompting.
     pub automatic_source_paths: HashSet<crate::nickel::key_path::KeyPath>,
@@ -215,6 +223,13 @@ fn build_file_entry(
         manual_resolution_paths,
         resource_disposition,
     } = resolution;
+    let mode = entry.parsed_mode()?;
+    if mode.is_some() && !cfg!(unix) {
+        return Err(anyhow::anyhow!(
+            "File entry '{}': 'mode' is only supported on Unix targets",
+            entry.name
+        ));
+    }
     if let Some(file) = &entry.from_file {
         let source_path = order_dir.join(file);
         if !source_path.exists() {
@@ -259,6 +274,7 @@ fn build_file_entry(
                 exclude_patterns: entry.exclude.clone(),
                 local_dir,
                 immutable: entry.immutable,
+                mode,
                 automatic_source_paths,
                 manual_resolution_paths,
                 resource_disposition,
@@ -278,6 +294,7 @@ fn build_file_entry(
             exclude_patterns: entry.exclude.clone(),
             local_dir,
             immutable: entry.immutable,
+            mode,
             automatic_source_paths,
             manual_resolution_paths,
             resource_disposition,
@@ -306,6 +323,7 @@ fn build_file_entry(
             exclude_patterns: vec![],
             local_dir: None,
             immutable: entry.immutable,
+            mode,
             automatic_source_paths,
             manual_resolution_paths,
             resource_disposition,
@@ -442,29 +460,11 @@ pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
         ));
     }
 
-    // Always try to clear an existing immutable target before writing. This
-    // lets a config converge from `immutable = true` back to `false`.
     let is_plaintext_dir = result.is_plaintext
         && result
             .source_path
             .as_ref()
             .is_some_and(|source_path| source_path.is_dir());
-
-    let existing_kind = node_kind(&result.target)?;
-    if existing_kind.is_some() && !is_plaintext_dir {
-        if dry_run {
-            if result.immutable {
-                log::info(&format!(
-                    "Would remove immutable flag from {}",
-                    result.target.display()
-                ));
-            }
-        } else if existing_kind == Some(NodeKind::Directory) {
-            remove_immutable_flag_recursive(&result.target, result.immutable)?;
-        } else if existing_kind == Some(NodeKind::File) {
-            remove_immutable_flag(&result.target, result.immutable)?;
-        }
-    }
 
     if result.is_plaintext {
         if let Some(source_path) = &result.source_path {
@@ -476,10 +476,17 @@ pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
                     result.local_dir.as_deref(),
                     exclude.as_ref(),
                     result.immutable,
+                    result.mode,
                     dry_run,
                 )?;
             } else {
-                copy_file(source_path, &result.target, dry_run)?;
+                copy_file(
+                    source_path,
+                    &result.target,
+                    result.mode,
+                    result.immutable,
+                    dry_run,
+                )?;
             }
         }
     } else {
@@ -495,14 +502,20 @@ pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
             return Ok(());
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = result.target.parent() {
-            ensure_dir(parent)?;
-        }
-
-        prepare_exact_node(&result.target, NodeKind::File, false)?;
-        std::fs::write(&result.target, &result.content)
-            .with_context(|| format!("Failed to write {}", result.target.display()))?;
+        atomic_replace_file(
+            &result.target,
+            result.mode,
+            None,
+            result.immutable,
+            |file| {
+                file.write_all(result.content.as_bytes()).with_context(|| {
+                    format!(
+                        "Failed to write replacement for {}",
+                        result.target.display()
+                    )
+                })
+            },
+        )?;
     }
 
     // Set immutable flag after successful write
@@ -552,7 +565,13 @@ fn create_symlink(source: &Path, target: &Path, dry_run: bool) -> Result<()> {
 }
 
 /// Copy a single file to target
-fn copy_file(source: &Path, target: &Path, dry_run: bool) -> Result<()> {
+fn copy_file(
+    source: &Path,
+    target: &Path,
+    mode: Option<u32>,
+    immutable: bool,
+    dry_run: bool,
+) -> Result<()> {
     if dry_run {
         prepare_exact_node(target, NodeKind::File, true)?;
         log::info(&format!(
@@ -563,20 +582,387 @@ fn copy_file(source: &Path, target: &Path, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Ensure parent directory exists
-    if let Some(parent) = target.parent() {
-        ensure_dir(parent)?;
+    let source_permissions = source
+        .metadata()
+        .with_context(|| format!("Failed to inspect {}", source.display()))?
+        .permissions();
+    atomic_replace_file(target, mode, Some(source_permissions), immutable, |file| {
+        let mut source_file = std::fs::File::open(source)
+            .with_context(|| format!("Failed to open {}", source.display()))?;
+        std::io::copy(&mut source_file, file).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+        Ok(())
+    })
+}
+
+/// Construct a complete regular-file replacement beside the Target, then
+/// atomically rename it into place. The temporary file is collision-resistant
+/// and is removed automatically on every pre-rename error path.
+fn atomic_replace_file(
+    target: &Path,
+    mode: Option<u32>,
+    fallback_permissions: Option<std::fs::Permissions>,
+    immutable: bool,
+    write: impl FnOnce(&mut std::fs::File) -> Result<()>,
+) -> Result<()> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Target has no parent: {}", target.display()))?;
+    ensure_dir(parent)?;
+
+    let existing_kind = node_kind(target)?;
+    let existing_permissions = if existing_kind == Some(NodeKind::File) {
+        Some(
+            target
+                .symlink_metadata()
+                .with_context(|| format!("Failed to inspect {}", target.display()))?
+                .permissions(),
+        )
+    } else {
+        None
+    };
+
+    #[cfg(unix)]
+    let desired_permissions = mode
+        .map(std::fs::Permissions::from_mode)
+        .or(existing_permissions)
+        .or(fallback_permissions);
+    #[cfg(not(unix))]
+    let desired_permissions = existing_permissions.or(fallback_permissions);
+
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".blend-").suffix(".tmp");
+    #[cfg(unix)]
+    {
+        let creation_permissions = desired_permissions
+            .clone()
+            .unwrap_or_else(|| std::fs::Permissions::from_mode(0o666));
+        builder.permissions(creation_permissions);
+    }
+    #[cfg(not(unix))]
+    if let Some(permissions) = desired_permissions.clone() {
+        builder.permissions(permissions);
     }
 
-    prepare_exact_node(target, NodeKind::File, false)?;
-    std::fs::copy(source, target).with_context(|| {
+    let mut replacement = builder.tempfile_in(parent).with_context(|| {
         format!(
-            "Failed to copy {} to {}",
-            source.display(),
+            "Failed to create temporary replacement beside {}",
             target.display()
         )
     })?;
+    write(replacement.as_file_mut())?;
+    replacement.as_file_mut().flush().with_context(|| {
+        format!(
+            "Failed to flush temporary replacement for {}",
+            target.display()
+        )
+    })?;
+    if let Some(permissions) = desired_permissions {
+        replacement
+            .as_file()
+            .set_permissions(permissions)
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions on replacement for {}",
+                    target.display()
+                )
+            })?;
+    }
 
+    // Closing the handle before rename keeps the replacement path portable and
+    // ensures all buffered userspace writes completed before it becomes live.
+    let replacement = replacement.into_temp_path();
+
+    match existing_kind {
+        Some(NodeKind::Directory) => {
+            remove_immutable_flag_recursive(target, immutable)?;
+            remove_exact_node(target, false)?;
+        }
+        Some(NodeKind::File) => {
+            #[cfg(unix)]
+            {
+                match open_regular_file_no_follow(target) {
+                    Ok(existing) => immutable::clear_file(&existing, target, immutable)?,
+                    Err(_) => {
+                        #[cfg(not(target_os = "linux"))]
+                        if immutable {
+                            immutable::clear_no_follow(target)?;
+                        }
+                        // Linux cannot inspect/update flags through a usable
+                        // ioctl descriptor when read access is denied. The
+                        // declaration does not imply that the existing inode
+                        // is immutable: attempt rename without modifying it.
+                        // The kernel rejects replacement if it really carries
+                        // the immutable flag, preserving the old Target.
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            remove_immutable_flag(target, immutable)?;
+        }
+        Some(NodeKind::Symlink | NodeKind::Other) => remove_exact_node(target, false)?,
+        None => {}
+    }
+
+    replacement.persist(target).map_err(|error| {
+        anyhow::anyhow!(
+            "Failed to atomically replace {}: {}",
+            target.display(),
+            error.error
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_regular_file_no_follow(path: &Path) -> Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "Failed to open regular file {} without following links",
+                path.display()
+            )
+        })?;
+    if !file
+        .metadata()
+        .with_context(|| format!("Failed to inspect open file {}", path.display()))?
+        .file_type()
+        .is_file()
+    {
+        return Err(anyhow::anyhow!(
+            "Target changed type while reconciling {}",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+/// Return managed regular Target files whose declared Unix mode has drifted.
+pub fn mode_mismatches(result: &BuildResult) -> Result<Vec<(PathBuf, u32)>> {
+    let Some(expected) = result.mode else {
+        return Ok(Vec::new());
+    };
+
+    #[cfg(not(unix))]
+    return Err(anyhow::anyhow!("'mode' is only supported on Unix targets"));
+
+    #[cfg(unix)]
+    {
+        let targets = if result.is_plaintext
+            && result
+                .source_path
+                .as_ref()
+                .is_some_and(|source_path| source_path.is_dir())
+        {
+            if node_kind(&result.target)? != Some(NodeKind::Directory) {
+                return Ok(Vec::new());
+            }
+            let source = result.source_path.as_ref().expect("checked above");
+            let exclude = build_glob_set(&result.exclude_patterns)?;
+            let mut targets = Vec::new();
+            for file in collect_merged_files(source, result.local_dir.as_deref(), exclude.as_ref())?
+            {
+                let mut parent = result.target.clone();
+                let mut valid = true;
+                if let Some(relative_parent) = file.rel_path.parent() {
+                    for component in relative_parent.components() {
+                        parent.push(component);
+                        if node_kind(&parent)? != Some(NodeKind::Directory) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if valid {
+                    targets.push(result.target.join(file.rel_path));
+                }
+            }
+            targets
+        } else {
+            vec![result.target.clone()]
+        };
+
+        let mut mismatches = Vec::new();
+        for target in targets {
+            if node_kind(&target)? != Some(NodeKind::File) {
+                continue;
+            }
+            if let Some(actual) = file_mode_mismatch(&target, expected)? {
+                mismatches.push((target, actual));
+            }
+        }
+        Ok(mismatches)
+    }
+}
+
+/// Return the actual Unix mode when a regular file differs from `expected`.
+pub fn file_mode_mismatch(path: &Path, expected: u32) -> Result<Option<u32>> {
+    if node_kind(path)? != Some(NodeKind::File) {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        let actual = path
+            .symlink_metadata()
+            .with_context(|| format!("Failed to inspect {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o7777;
+        Ok((actual != expected).then_some(actual))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = expected;
+        Err(anyhow::anyhow!("'mode' is only supported on Unix targets"))
+    }
+}
+
+/// Enforce declared file modes independently of content reconciliation.
+/// Returns whether any regular Target file needed a mode correction.
+pub fn reconcile_file_mode(result: &BuildResult, dry_run: bool) -> Result<bool> {
+    let Some(expected) = result.mode else {
+        return Ok(false);
+    };
+    let mismatches = mode_mismatches(result)?;
+    for (target, actual) in &mismatches {
+        if dry_run {
+            log::info(&format!(
+                "Would change mode of {} from {:04o} to {:04o}",
+                target.display(),
+                actual,
+                expected
+            ));
+            continue;
+        }
+
+        #[cfg(unix)]
+        {
+            reconcile_regular_file_mode(target, expected, result.immutable)?;
+        }
+    }
+    Ok(!mismatches.is_empty())
+}
+
+#[cfg(unix)]
+fn reconcile_regular_file_mode(path: &Path, expected: u32, immutable: bool) -> Result<()> {
+    let file = match open_regular_file_no_follow(path) {
+        Ok(file) => file,
+        Err(_) if !immutable => {
+            set_file_mode_no_follow(path, expected)?;
+            return Ok(());
+        }
+        Err(_) => {
+            #[cfg(target_os = "macos")]
+            {
+                immutable::clear_no_follow(path)?;
+                // Restoration must not require read access, even when the
+                // requested mode remains unreadable. Also restore on failure.
+                let mode_result = set_file_mode_no_follow(path, expected);
+                let flag_result = immutable::set_no_follow(path);
+                mode_result?;
+                flag_result?;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                // An immutable declaration does not imply an existing flag.
+                // chmod through the verified inode first: this succeeds for
+                // an owned unreadable file whose immutable flag is absent.
+                set_file_mode_no_follow(path, expected)?;
+                match open_regular_file_no_follow(path) {
+                    Ok(file) => immutable::set_file(&file, path)?,
+                    Err(error) => log::warn(&format!(
+                        "Could not set immutable flag on {} after mode repair: {}",
+                        path.display(),
+                        error
+                    )),
+                }
+            }
+            return Ok(());
+        }
+    };
+    let actual = file
+        .metadata()
+        .with_context(|| format!("Failed to inspect open file {}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o7777;
+    if actual == expected {
+        if immutable {
+            immutable::set_file(&file, path)?;
+        }
+        return Ok(());
+    }
+    immutable::clear_file(&file, path, immutable)?;
+    file.set_permissions(std::fs::Permissions::from_mode(expected))
+        .with_context(|| format!("Failed to set mode on {}", path.display()))?;
+    if immutable {
+        immutable::set_file(&file, path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn set_file_mode_no_follow(path: &Path, mode: u32) -> Result<()> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| format!("Failed to open {} without following links", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("Failed to inspect open file {}", path.display()))?
+        .file_type()
+        .is_file()
+    {
+        anyhow::bail!("Target changed type while reconciling {}", path.display());
+    }
+
+    // Linux's original fchmodat syscall ignores flags, while glibc rejects
+    // AT_SYMLINK_NOFOLLOW on kernels without fchmodat2. A procfs path to a
+    // held O_PATH descriptor names the already-verified inode, so chmod cannot
+    // be redirected by replacing the original path with a symlink.
+    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    std::fs::set_permissions(&descriptor_path, std::fs::Permissions::from_mode(mode)).with_context(
+        || {
+            format!(
+                "Failed to set mode on {} without following links",
+                path.display()
+            )
+        },
+    )
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn set_file_mode_no_follow(path: &Path, mode: u32) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path_bytes = CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("Path contains an interior NUL byte: {}", path.display()))?;
+    let result = unsafe {
+        libc::fchmodat(
+            libc::AT_FDCWD,
+            path_bytes.as_ptr(),
+            mode as libc::mode_t,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "Failed to set mode on {} without following links",
+                path.display()
+            )
+        });
+    }
     Ok(())
 }
 
@@ -683,6 +1069,7 @@ fn copy_directory(
     local_dir: Option<&Path>,
     exclude: Option<&GlobSet>,
     immutable: bool,
+    mode: Option<u32>,
     dry_run: bool,
 ) -> Result<()> {
     if !source.exists() {
@@ -715,11 +1102,7 @@ fn copy_directory(
         if let Some(relative_parent) = mf.rel_path.parent() {
             prepare_managed_parent_dirs(target, relative_parent, false)?;
         }
-        if node_kind(&target_path)? == Some(NodeKind::File) {
-            remove_immutable_flag(&target_path, immutable)?;
-        }
-        prepare_exact_node(&target_path, NodeKind::File, false)?;
-        std::fs::copy(&mf.source, &target_path)?;
+        copy_file(&mf.source, &target_path, mode, immutable, false)?;
         if immutable {
             set_immutable_flag(&target_path)?;
         }
@@ -746,6 +1129,165 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn test_atomic_replace_failure_preserves_existing_target() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("config");
+        std::fs::write(&target, "original").unwrap();
+
+        let error = atomic_replace_file(&target, None, None, false, |file| {
+            file.write_all(b"partial")?;
+            anyhow::bail!("injected write failure")
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected write failure"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
+        let leftovers: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".blend-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temporary replacement was not cleaned up"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_declared_mode_detects_and_clears_special_bits() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("tool");
+        std::fs::write(&target, "tool").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o1755)).unwrap();
+
+        assert_eq!(file_mode_mismatch(&target, 0o755).unwrap(), Some(0o1755));
+        reconcile_regular_file_mode(&target, 0o755, false).unwrap();
+        assert_eq!(
+            target.metadata().unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_mode_reconciliation_refuses_symlink_without_touching_referent() {
+        let temp = TempDir::new().unwrap();
+        let backing = temp.path().join("backing");
+        let target = temp.path().join("config");
+        std::fs::write(&backing, "external").unwrap();
+        std::fs::set_permissions(&backing, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&backing, &target).unwrap();
+
+        let result = reconcile_regular_file_mode(&target, 0o600, false);
+        #[cfg(target_os = "linux")]
+        assert!(result.is_err(), "Linux must reject a symlink descriptor");
+        #[cfg(not(target_os = "linux"))]
+        let _ = result;
+        assert!(target.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&backing).unwrap(), "external");
+        assert_eq!(
+            backing.metadata().unwrap().permissions().mode() & 0o7777,
+            0o644
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_mode_reconciliation_repairs_inaccessible_file() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("config");
+        std::fs::write(&target, "secret").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            assert!(
+                std::process::Command::new("chflags")
+                    .arg("uchg")
+                    .arg(&target)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        reconcile_regular_file_mode(&target, 0o600, true).unwrap();
+        assert_eq!(
+            target.metadata().unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::macos::fs::MetadataExt;
+            let flags = target.metadata().unwrap().st_flags();
+            assert!(
+                std::process::Command::new("chflags")
+                    .arg("nouchg")
+                    .arg(&target)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert_ne!(
+                flags & libc::UF_IMMUTABLE,
+                0,
+                "mode repair dropped immutable"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_unreadable_mode_repair_restores_immutable_without_reopening() {
+        use std::os::macos::fs::MetadataExt;
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("config");
+        std::fs::write(&target, "secret").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
+        immutable::set_no_follow(&target).unwrap();
+        let result = reconcile_regular_file_mode(&target, 0, true);
+        let metadata = target.metadata().unwrap();
+        // Restore cleanup access before asserting, even on a regression.
+        immutable::clear_no_follow(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        result.unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0);
+        assert_ne!(metadata.st_flags() & libc::UF_IMMUTABLE, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_replace_raced_symlink_does_not_mutate_referent() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("config");
+        let backing = temp.path().join("backing");
+        std::fs::write(&target, "original").unwrap();
+        std::fs::write(&backing, "external").unwrap();
+        std::fs::set_permissions(&backing, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        atomic_replace_file(&target, Some(0o600), None, false, |file| {
+            file.write_all(b"replacement")?;
+            std::fs::remove_file(&target)?;
+            std::os::unix::fs::symlink(&backing, &target)?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(target.symlink_metadata().unwrap().file_type().is_file());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "replacement");
+        assert_eq!(std::fs::read_to_string(&backing).unwrap(), "external");
+        assert_eq!(
+            backing.metadata().unwrap().permissions().mode() & 0o7777,
+            0o644
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".blend-"))
+            .collect();
+        assert!(leftovers.is_empty());
     }
 
     #[test]
@@ -809,6 +1351,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
 
         let result = build_file_entry(
@@ -939,7 +1482,7 @@ mod tests {
         let patterns = vec!["*.bak".to_string()];
         let gs = build_glob_set(&patterns).unwrap();
 
-        copy_directory(&source, &target, None, gs.as_ref(), false, false).unwrap();
+        copy_directory(&source, &target, None, gs.as_ref(), false, None, false).unwrap();
 
         assert!(target.join("keep.txt").exists());
         assert!(!target.join("skip.bak").exists());
@@ -960,7 +1503,7 @@ mod tests {
         std::fs::write(local.join("shared.txt"), "local-version").unwrap();
         std::fs::write(local.join("extra.txt"), "local-only").unwrap();
 
-        copy_directory(&source, &target, Some(&local), None, false, false).unwrap();
+        copy_directory(&source, &target, Some(&local), None, false, None, false).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(target.join("tracked.txt")).unwrap(),
@@ -998,6 +1541,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: HashSet::new(),
             manual_resolution_paths: HashSet::new(),
             resource_disposition: ResourceDisposition::Present,
@@ -1037,6 +1581,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: HashSet::new(),
             manual_resolution_paths: HashSet::new(),
             resource_disposition: ResourceDisposition::Present,
@@ -1072,6 +1617,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: HashSet::new(),
             manual_resolution_paths: HashSet::new(),
             resource_disposition: ResourceDisposition::Present,
@@ -1125,6 +1671,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: HashSet::new(),
             manual_resolution_paths: HashSet::new(),
             resource_disposition: ResourceDisposition::Present,
