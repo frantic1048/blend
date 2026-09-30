@@ -34,6 +34,7 @@
     exclude | Array String | optional,  # Glob patterns to skip in from_file directories
     local | String | optional,          # Local overlay directory (from_file directories only)
     immutable | Bool | optional,        # Set OS immutable flag after deploying
+    mode | String | optional,           # Unix file mode as four octal digits, for example "0600"
   },
 
   OrderMeta = {

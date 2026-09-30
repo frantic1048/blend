@@ -98,6 +98,9 @@ pub struct FileEntry {
     /// Set OS immutable flag on the deployed file after writing
     #[serde(default)]
     pub immutable: bool,
+    /// Unix permission mode enforced on managed regular target files.
+    /// Written as a four-digit octal string such as "0600".
+    pub mode: Option<String>,
 }
 
 impl FileEntry {
@@ -122,6 +125,12 @@ impl FileEntry {
         if self.local.is_some() && self.from_file.is_none() {
             bail!("'local' can only be used with 'from_file', not 'from_config'");
         }
+        if self.mode.is_some() && self.symlink {
+            bail!("'mode' cannot be used with 'symlink'");
+        }
+        if let Some(mode) = &self.mode {
+            parse_file_mode(mode)?;
+        }
         if self.name.is_empty() {
             if let Some(from_file) = &self.from_file {
                 self.name.clone_from(from_file);
@@ -130,6 +139,11 @@ impl FileEntry {
             }
         }
         Ok(())
+    }
+
+    /// Parse the optional canonical four-digit octal file mode.
+    pub fn parsed_mode(&self) -> Result<Option<u32>> {
+        self.mode.as_deref().map(parse_file_mode).transpose()
     }
 
     /// Get the effective format (explicit or inferred from name)
@@ -163,6 +177,19 @@ impl FileEntry {
             None => true,
         }
     }
+}
+
+fn parse_file_mode(mode: &str) -> Result<u32> {
+    if mode.len() != 4
+        || !mode.starts_with('0')
+        || !mode
+            .as_bytes()
+            .iter()
+            .all(|byte| matches!(byte, b'0'..=b'7'))
+    {
+        bail!("'mode' must be a four-digit octal string such as \"0600\"");
+    }
+    u32::from_str_radix(mode, 8).map_err(Into::into)
 }
 
 /// Metadata section of order.ncl (new multi-file schema)
@@ -229,6 +256,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_file_mode_requires_canonical_octal_string() {
+        assert_eq!(parse_file_mode("0600").unwrap(), 0o600);
+        for invalid in ["600", "00600", "0800", "0o600", "0644 "] {
+            assert!(
+                parse_file_mode(invalid).is_err(),
+                "accepted invalid mode {invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn test_format_from_path() {
         assert_eq!(Format::from_path("~/.config/starship.toml"), Format::Toml);
         assert_eq!(Format::from_path("settings.json"), Format::Json);
@@ -271,6 +309,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
 
         // Local prefix takes precedence over global
@@ -295,6 +334,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
 
         let global_prefix = vec!["~/global/".to_string()];
@@ -317,6 +357,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         entry.resolve_defaults().unwrap();
         assert_eq!(entry.name, "nvim");
@@ -336,6 +377,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         assert!(entry.resolve_defaults().is_err());
     }
@@ -354,6 +396,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         assert!(entry.resolve_defaults().is_err());
     }
@@ -372,6 +415,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         assert!(entry.resolve_defaults().is_err());
     }
@@ -390,6 +434,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         assert!(entry.resolve_defaults().is_err());
     }
@@ -408,6 +453,7 @@ mod tests {
             exclude: vec![],
             local: None,
             immutable: false,
+            mode: None,
         };
         entry.resolve_defaults().unwrap();
         assert_eq!(entry.name, "bin");
@@ -427,6 +473,7 @@ mod tests {
             exclude: vec![],
             local: Some("test.local".to_string()),
             immutable: false,
+            mode: None,
         };
         assert!(entry.resolve_defaults().is_err());
     }
@@ -445,6 +492,7 @@ mod tests {
             exclude: vec![],
             local: Some("elvish.local".to_string()),
             immutable: false,
+            mode: None,
         };
         entry.resolve_defaults().unwrap();
         assert_eq!(entry.name, "elvish");

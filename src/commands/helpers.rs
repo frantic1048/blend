@@ -1,7 +1,9 @@
 use anyhow::{Context as _, Result};
 use console::style;
 
-use crate::compose::{BuildResult, build_glob_set, collect_merged_files, discover_orders};
+use crate::compose::{
+    BuildResult, build_glob_set, collect_merged_files, discover_orders, file_mode_mismatch,
+};
 use crate::context::Context;
 use crate::diff::{DiffResult, FileDiffResult, diff_configs, diff_managed_files};
 use crate::fs_node::{NodeKind, node_kind};
@@ -50,6 +52,7 @@ pub fn result_has_type_mismatch(result: &BuildResult) -> Result<bool> {
         .any(FileDiffResult::has_type_mismatch))
 }
 
+#[cfg(test)]
 pub fn compute_managed_dir_diffs(
     source_dir: &std::path::Path,
     target_dir: &std::path::Path,
@@ -57,17 +60,67 @@ pub fn compute_managed_dir_diffs(
     exclude_patterns: &[String],
     ignore_keys: &[String],
 ) -> Result<Vec<FileDiffResult>> {
+    compute_managed_dir_diffs_with_mode(
+        source_dir,
+        target_dir,
+        local_dir,
+        exclude_patterns,
+        ignore_keys,
+        None,
+    )
+}
+
+pub fn compute_managed_dir_diffs_with_mode(
+    source_dir: &std::path::Path,
+    target_dir: &std::path::Path,
+    local_dir: Option<&std::path::Path>,
+    exclude_patterns: &[String],
+    ignore_keys: &[String],
+    mode: Option<u32>,
+) -> Result<Vec<FileDiffResult>> {
     let exclude = build_glob_set(exclude_patterns)?;
     let merged = collect_merged_files(source_dir, local_dir, exclude.as_ref())?;
     let managed_files: Vec<_> = merged
         .into_iter()
         .map(|file| (file.source, file.rel_path))
         .collect();
-    Ok(diff_managed_files(&managed_files, target_dir, ignore_keys)?)
+    let mut diffs = diff_managed_files(&managed_files, target_dir, ignore_keys)?;
+    if let Some(expected) = mode {
+        for diff in &mut diffs {
+            if diff.expected_kind != NodeKind::File {
+                continue;
+            }
+            let target = target_dir.join(&diff.rel_path);
+            if let Some(actual) = file_mode_mismatch(&target, expected)? {
+                diff.has_changes = true;
+                let annotation = format!("mode {:04o} -> {:04o}", actual, expected);
+                if diff.diff_output.is_empty() {
+                    diff.diff_output = annotation;
+                } else {
+                    diff.diff_output.push('\n');
+                    diff.diff_output.push_str(&annotation);
+                }
+            }
+        }
+    }
+    Ok(diffs)
 }
 
 /// Compute the diff between a build result and the deployed file
 pub fn compute_diff_for_result(result: &BuildResult) -> Result<DiffResult> {
+    compute_diff_for_result_with_mode(result, true)
+}
+
+/// Compute content and type differences without including declared mode drift.
+/// Sync uses this before enforcing a mode that may remove read access.
+pub fn compute_content_diff_for_result(result: &BuildResult) -> Result<DiffResult> {
+    compute_diff_for_result_with_mode(result, false)
+}
+
+fn compute_diff_for_result_with_mode(
+    result: &BuildResult,
+    include_mode: bool,
+) -> Result<DiffResult> {
     let target_kind = node_kind(&result.target)
         .with_context(|| format!("could not inspect target {}", result.target.display()))?;
     if target_kind.is_none() {
@@ -100,35 +153,74 @@ pub fn compute_diff_for_result(result: &BuildResult) -> Result<DiffResult> {
         });
     }
 
-    if result.is_plaintext {
+    let mut diff = if result.is_plaintext {
         if let Some(source_path) = &result.source_path {
             if source_path.is_dir() {
-                let file_diffs = compute_dir_file_diffs(result)?;
+                let file_diffs = compute_managed_dir_diffs_with_mode(
+                    source_path,
+                    &result.target,
+                    result.local_dir.as_deref(),
+                    &result.exclude_patterns,
+                    &result.ignore_keys,
+                    include_mode.then_some(result.mode).flatten(),
+                )?;
                 return Ok(aggregate_dir_diff(&file_diffs));
             }
-            if let (Ok(source_content), Ok(deployed)) = (
-                std::fs::read_to_string(source_path),
-                std::fs::read_to_string(&result.target),
-            ) {
-                return Ok(diff_configs(
-                    nickel::Format::Plaintext,
-                    &source_content,
-                    &deployed,
-                    &result.ignore_keys,
-                ));
+            let source_bytes = std::fs::read(source_path)
+                .with_context(|| format!("could not read Source {}", source_path.display()))?;
+            match std::fs::read(&result.target) {
+                Ok(deployed_bytes) if deployed_bytes == source_bytes => DiffResult::no_changes(),
+                Ok(deployed_bytes) => match (
+                    std::str::from_utf8(&source_bytes),
+                    std::str::from_utf8(&deployed_bytes),
+                ) {
+                    (Ok(source_content), Ok(deployed)) => diff_configs(
+                        nickel::Format::Plaintext,
+                        source_content,
+                        deployed,
+                        &result.ignore_keys,
+                    ),
+                    _ => DiffResult::with_changes("binary content differs".to_string()),
+                },
+                Err(error) => DiffResult::with_changes(format!(
+                    "could not read target {}: {}",
+                    result.target.display(),
+                    error
+                )),
             }
+        } else {
+            DiffResult::no_changes()
         }
-        Ok(DiffResult::no_changes())
-    } else if let Ok(deployed) = std::fs::read_to_string(&result.target) {
-        Ok(diff_configs(
-            result.format,
-            &result.content,
-            &deployed,
-            &result.ignore_keys,
-        ))
     } else {
-        Ok(DiffResult::no_changes())
+        match std::fs::read_to_string(&result.target) {
+            Ok(deployed) => diff_configs(
+                result.format,
+                &result.content,
+                &deployed,
+                &result.ignore_keys,
+            ),
+            Err(error) => DiffResult::with_changes(format!(
+                "could not read target {}: {}",
+                result.target.display(),
+                error
+            )),
+        }
+    };
+
+    if include_mode
+        && let Some(expected) = result.mode
+        && let Some(actual) = file_mode_mismatch(&result.target, expected)?
+    {
+        let annotation = format!("mode {:04o} -> {:04o}", actual, expected);
+        if diff.output.is_empty() {
+            diff.output = annotation;
+        } else {
+            diff.output.push('\n');
+            diff.output.push_str(&annotation);
+        }
+        diff.has_changes = true;
     }
+    Ok(diff)
 }
 
 /// Compute per-file diffs for a directory build result, filtering out
@@ -137,12 +229,13 @@ pub fn compute_dir_file_diffs(result: &BuildResult) -> Result<Vec<FileDiffResult
     if expected_node_kind(result) == NodeKind::Directory
         && let Some(source_path) = &result.source_path
     {
-        return compute_managed_dir_diffs(
+        return compute_managed_dir_diffs_with_mode(
             source_path,
             &result.target,
             result.local_dir.as_deref(),
             &result.exclude_patterns,
             &result.ignore_keys,
+            result.mode,
         );
     }
     Ok(Vec::new())
@@ -421,6 +514,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -456,6 +550,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: Some(local),
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -493,6 +588,7 @@ mod tests {
             exclude_patterns: vec!["excluded.txt".to_string()],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -523,6 +619,7 @@ mod tests {
             exclude_patterns: vec!["[".to_string()],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -550,6 +647,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -576,6 +674,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -612,6 +711,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,
@@ -654,6 +754,7 @@ mod tests {
             exclude_patterns: vec![],
             local_dir: None,
             immutable: false,
+            mode: None,
             automatic_source_paths: std::collections::HashSet::new(),
             manual_resolution_paths: std::collections::HashSet::new(),
             resource_disposition: crate::nickel::resolution::ResourceDisposition::Present,

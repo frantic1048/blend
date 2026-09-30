@@ -10,6 +10,7 @@ clap = { version = "4", features = ["derive"] }
 walkdir = "2"
 globset = "0.4"
 console = "0.16"
+tempfile = "=3.27.0"
 
 # Nickel DSL
 nickel-lang = "=2.2.0"
@@ -46,7 +47,6 @@ thiserror = "2"
 anyhow = "1"
 
 [dev-dependencies]
-tempfile = "=3.27.0"
 rexpect = "=0.7.1"
 
 [profile.release]

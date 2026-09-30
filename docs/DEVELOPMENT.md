@@ -184,14 +184,20 @@ alias, tag, numeric, and source-location behavior are part of the contract.
 Target path, rendered or literal Source, format, ownership paths, resource
 disposition, and deployment options.
 
-Comparison has two independent dimensions:
+Comparison has three independent dimensions:
 
 1. filesystem node type: missing, regular file, directory, or symlink;
-2. content or symlink destination when the types are compatible.
+2. content or symlink destination when the types are compatible;
+3. an explicitly declared Unix mode for managed regular files.
 
 Unexpected symlinks are never followed for ordinary Target-to-Source adoption.
 Source-to-Target replacement operates on the exact managed node and leaves
 ancestor symlinks alone.
+
+Regular Source-to-Target files are assembled in collision-resistant temporary
+files beside the Target, flushed and closed, and then atomically renamed into
+place. Declared modes are applied to the replacement before the rename. Without
+a declaration, replacement preserves an existing Target mode.
 
 Directory `from_file` entries are built from the tracked Source plus an optional
 local overlay, with excludes applied to the merged view. That view—not every

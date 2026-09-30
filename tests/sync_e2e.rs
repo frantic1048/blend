@@ -139,6 +139,257 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_sync_enforces_declared_mode_independently_of_content() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = TempDir::new().unwrap();
+    let blend_dir = TempDir::new().unwrap();
+    copy_shared_order_files(blend_dir.path());
+    let order_dir = orders_dir(blend_dir.path()).join("secure");
+    std::fs::create_dir_all(&order_dir).unwrap();
+    std::fs::write(order_dir.join("secret.conf"), "token=secret\n").unwrap();
+    std::fs::write(
+        order_dir.join("order.ncl"),
+        r#"let { Order, .. } = import "../order.contract.ncl" in
+{
+  blend = {
+    prefix = ["~/.config/secure"],
+    files = [{ from_file = "secret.conf", mode = "0600" }],
+  },
+} | Order
+"#,
+    )
+    .unwrap();
+
+    let first = run_blend(home.path(), blend_dir.path(), &["sync", "secure"]);
+    assert!(
+        first.status.success(),
+        "initial sync failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr),
+    );
+    let target = home.path().join(".config/secure/secret.conf");
+    assert_eq!(
+        target.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let second = run_blend(home.path(), blend_dir.path(), &["sync", "secure"]);
+    assert!(
+        second.status.success(),
+        "mode-only sync failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr),
+    );
+    assert_eq!(
+        target.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let third = run_blend(home.path(), blend_dir.path(), &["sync", "secure"]);
+    let third_stdout = String::from_utf8_lossy(&third.stdout);
+    let third_stderr = String::from_utf8_lossy(&third.stderr);
+    assert!(
+        third.status.success()
+            && third_stdout
+                .contains("Sync complete: 0 Source -> Target, 0 Target -> Source, 0 skipped"),
+        "unchanged-mode sync was not a no-op:\nstdout: {}\nstderr: {}",
+        third_stdout,
+        third_stderr,
+    );
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "token=secret\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_pull_reads_target_before_enforcing_unreadable_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = TempDir::new().unwrap();
+    let blend_dir = TempDir::new().unwrap();
+    copy_shared_order_files(blend_dir.path());
+    let order = orders_dir(blend_dir.path()).join("secure");
+    std::fs::create_dir_all(&order).unwrap();
+    std::fs::write(order.join("secret"), "source\n").unwrap();
+    std::fs::write(order.join("order.ncl"), r#"let { Order, .. } = import "../order.contract.ncl" in
+{ blend = { prefix = ["~/.config/secure"], files = [{ from_file = "secret", mode = "0000" }] } } | Order
+"#).unwrap();
+    let target = home.path().join(".config/secure/secret");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "target\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let output = run_blend(
+        home.path(),
+        blend_dir.path(),
+        &["sync", "--force-target-to-source", "secure"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(order.join("secret")).unwrap(),
+        "target\n"
+    );
+    assert_eq!(target.metadata().unwrap().permissions().mode() & 0o7777, 0);
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_forced_replacement_of_unreadable_target_with_immutable_declaration() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = TempDir::new().unwrap();
+    let blend_dir = TempDir::new().unwrap();
+    copy_shared_order_files(blend_dir.path());
+    let order = orders_dir(blend_dir.path()).join("secure");
+    std::fs::create_dir_all(&order).unwrap();
+    std::fs::write(order.join("secret"), "new content\n").unwrap();
+    std::fs::write(order.join("order.ncl"), r#"let { Order, .. } = import "../order.contract.ncl" in
+{ blend = { prefix = ["~/.config/secure"], files = [{ from_file = "secret", mode = "0000", immutable = true }] } } | Order
+"#).unwrap();
+    let target = home.path().join(".config/secure/secret");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "old content\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0)).unwrap();
+    let output = run_blend(
+        home.path(),
+        blend_dir.path(),
+        &["sync", "--force-source-to-target", "secure"],
+    );
+    let metadata = target.metadata().unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0);
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_directory_modes_do_not_traverse_wrong_target_components() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for root_mismatch in [true, false] {
+        let home = TempDir::new().unwrap();
+        let blend_dir = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        copy_shared_order_files(blend_dir.path());
+        let order = orders_dir(blend_dir.path()).join("secure");
+        std::fs::create_dir_all(order.join("tree/sub")).unwrap();
+        std::fs::write(order.join("tree/sub/config"), "source\n").unwrap();
+        std::fs::write(order.join("order.ncl"), r#"let { Order, .. } = import "../order.contract.ncl" in
+{ blend = { prefix = ["~/.config/secure"], files = [{ from_file = "tree", mode = "0600" }] } } | Order
+"#).unwrap();
+        let target = home.path().join(".config/secure/tree");
+        let external_file = external.path().join("sub/config");
+        std::fs::create_dir_all(external_file.parent().unwrap()).unwrap();
+        std::fs::write(&external_file, "external\n").unwrap();
+        std::fs::set_permissions(&external_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let wrong = if root_mismatch {
+            target.clone()
+        } else {
+            target.join("sub")
+        };
+        std::fs::create_dir_all(wrong.parent().unwrap()).unwrap();
+        let referent = if root_mismatch {
+            external.path().to_path_buf()
+        } else {
+            external.path().join("sub")
+        };
+        symlink(&referent, &wrong).unwrap();
+        let output = run_blend(
+            home.path(),
+            blend_dir.path(),
+            &["sync", "--force-target-to-source", "secure"],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            external_file.metadata().unwrap().permissions().mode() & 0o7777,
+            0o644
+        );
+        assert_eq!(
+            std::fs::read_to_string(&external_file).unwrap(),
+            "external\n"
+        );
+        std::fs::remove_file(&wrong).unwrap();
+        std::fs::write(&wrong, "wrong type").unwrap();
+        let output = run_blend(
+            home.path(),
+            blend_dir.path(),
+            &["sync", "--force-source-to-target", "secure"],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("sub/config")).unwrap(),
+            "source\n"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_atomic_replacement_preserves_mode_when_omitted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = TempDir::new().unwrap();
+    let blend_dir = TempDir::new().unwrap();
+    copy_shared_order_files(blend_dir.path());
+    let order_dir = orders_dir(blend_dir.path()).join("plain");
+    std::fs::create_dir_all(&order_dir).unwrap();
+    let source = order_dir.join("config");
+    std::fs::write(&source, "first\n").unwrap();
+    std::fs::write(
+        order_dir.join("order.ncl"),
+        r#"let { Order, .. } = import "../order.contract.ncl" in
+{
+  blend = {
+    prefix = ["~/.config/plain"],
+    files = [{ from_file = "config" }],
+  },
+} | Order
+"#,
+    )
+    .unwrap();
+
+    let first = run_blend(home.path(), blend_dir.path(), &["sync", "plain"]);
+    assert!(first.status.success());
+    let target = home.path().join(".config/plain/config");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&source, "second\n").unwrap();
+
+    let second = run_blend(
+        home.path(),
+        blend_dir.path(),
+        &["sync", "--force-source-to-target", "plain"],
+    );
+    assert!(
+        second.status.success(),
+        "replacement sync failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr),
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "second\n");
+    assert_eq!(
+        target.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
 #[test]
 fn test_create_order_scaffolds_empty_order() {
     let home = TempDir::new().unwrap();

@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::path::Path;
 
 use anyhow::Result;
@@ -38,14 +39,62 @@ pub fn set(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_file(file: &File, path: &Path, warn_on_failure: bool) -> Result<()> {
+    record_test_event(TestImmutableEventKind::Clear, path);
+
+    if let Err(e) = platform::clear_file(file, path)
+        && warn_on_failure
+    {
+        log::warn(&format!(
+            "Failed to clear immutable flag on {}: {} — may require elevated permissions",
+            path.display(),
+            e
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn clear_no_follow(path: &Path) -> Result<()> {
+    record_test_event(TestImmutableEventKind::Clear, path);
+    // This fallback is used when clearing the flag is a prerequisite for
+    // replacement or mode repair. Preserve the error instead of attempting
+    // the dependent operation against a target that may still be immutable.
+    platform::clear_no_follow(path)
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_no_follow(path: &Path) -> Result<()> {
+    record_test_event(TestImmutableEventKind::Set, path);
+    platform::set_no_follow(path)
+}
+
+pub fn set_file(file: &File, path: &Path) -> Result<()> {
+    record_test_event(TestImmutableEventKind::Set, path);
+
+    if let Err(e) = platform::set_file(file, path) {
+        log::warn(&format!(
+            "Failed to set immutable flag on {}: {} — may require elevated permissions",
+            path.display(),
+            e
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::CString;
     use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
     use anyhow::{Context, Result};
+
+    unsafe extern "C" {
+        fn lchflags(path: *const libc::c_char, flags: libc::c_uint) -> libc::c_int;
+    }
 
     pub fn clear(path: &Path) -> Result<()> {
         update(path, |flags| flags & !libc::UF_IMMUTABLE)
@@ -53,6 +102,46 @@ mod platform {
 
     pub fn set(path: &Path) -> Result<()> {
         update(path, |flags| flags | libc::UF_IMMUTABLE)
+    }
+
+    pub fn clear_file(file: &std::fs::File, path: &Path) -> Result<()> {
+        update_file(file, path, |flags| flags & !libc::UF_IMMUTABLE)
+    }
+
+    pub fn set_file(file: &std::fs::File, path: &Path) -> Result<()> {
+        update_file(file, path, |flags| flags | libc::UF_IMMUTABLE)
+    }
+
+    pub fn clear_no_follow(path: &Path) -> Result<()> {
+        update_no_follow(path, |flags| flags & !libc::UF_IMMUTABLE)
+    }
+
+    pub fn set_no_follow(path: &Path) -> Result<()> {
+        update_no_follow(path, |flags| flags | libc::UF_IMMUTABLE)
+    }
+
+    fn update_no_follow(
+        path: &Path,
+        update_flags: impl FnOnce(libc::c_uint) -> libc::c_uint,
+    ) -> Result<()> {
+        let c_path = c_path(path)?;
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe { libc::lstat(c_path.as_ptr(), stat.as_mut_ptr()) };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("lstat failed on {}", path.display()));
+        }
+        let flags = unsafe { stat.assume_init().st_flags };
+        let next_flags = update_flags(flags);
+        if next_flags == flags {
+            return Ok(());
+        }
+        let result = unsafe { lchflags(c_path.as_ptr(), next_flags) };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("lchflags failed on {}", path.display()));
+        }
+        Ok(())
     }
 
     fn update(path: &Path, update_flags: impl FnOnce(libc::c_uint) -> libc::c_uint) -> Result<()> {
@@ -70,6 +159,30 @@ mod platform {
                 .with_context(|| format!("chflags failed on {}", path.display()));
         }
 
+        Ok(())
+    }
+
+    fn update_file(
+        file: &std::fs::File,
+        path: &Path,
+        update_flags: impl FnOnce(libc::c_uint) -> libc::c_uint,
+    ) -> Result<()> {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("fstat failed on {}", path.display()));
+        }
+        let flags = unsafe { stat.assume_init().st_flags };
+        let next_flags = update_flags(flags);
+        if next_flags == flags {
+            return Ok(());
+        }
+        let result = unsafe { libc::fchflags(file.as_raw_fd(), next_flags) };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("fchflags failed on {}", path.display()));
+        }
         Ok(())
     }
 
@@ -108,6 +221,14 @@ mod platform {
         update(path, |flags| flags | FS_IMMUTABLE_FL)
     }
 
+    pub fn clear_file(file: &File, path: &Path) -> Result<()> {
+        update_file(file, path, |flags| flags & !FS_IMMUTABLE_FL)
+    }
+
+    pub fn set_file(file: &File, path: &Path) -> Result<()> {
+        update_file(file, path, |flags| flags | FS_IMMUTABLE_FL)
+    }
+
     fn update(path: &Path, update_flags: impl FnOnce(libc::c_uint) -> libc::c_uint) -> Result<()> {
         let file = File::open(path).with_context(|| {
             format!(
@@ -132,6 +253,25 @@ mod platform {
         Ok(())
     }
 
+    fn update_file(
+        file: &File,
+        path: &Path,
+        update_flags: impl FnOnce(libc::c_uint) -> libc::c_uint,
+    ) -> Result<()> {
+        let mut flags = get_flags(file, path)?;
+        let next_flags = update_flags(flags);
+        if next_flags == flags {
+            return Ok(());
+        }
+        flags = next_flags;
+        let result = unsafe { libc::ioctl(file.as_raw_fd(), libc::FS_IOC_SETFLAGS, &flags) };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("FS_IOC_SETFLAGS failed on {}", path.display()));
+        }
+        Ok(())
+    }
+
     fn get_flags(file: &File, path: &Path) -> Result<libc::c_uint> {
         let mut flags: libc::c_uint = 0;
         let result = unsafe { libc::ioctl(file.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut flags) };
@@ -146,6 +286,7 @@ mod platform {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod platform {
+    use std::fs::File;
     use std::path::Path;
 
     use anyhow::Result;
@@ -155,6 +296,18 @@ mod platform {
     }
 
     pub fn set(_path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn clear_file(_file: &File, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn set_file(_file: &File, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn clear_no_follow(_path: &Path) -> Result<()> {
         Ok(())
     }
 }

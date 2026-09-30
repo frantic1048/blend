@@ -103,11 +103,25 @@ prefixes.
 | `exclude` | `from_file` directory | Glob patterns omitted from the merged Source view |
 | `local` | `from_file` directory | Machine-local overlay merged over tracked Source |
 | `immutable` | Entry | Apply the platform immutable flag after deployment |
+| `mode` | Regular file entry | Enforce a Unix mode written as four octal digits, such as `"0600"` |
 | `ignore` | Order or entry | Legacy diff filtering; new structured Orders should use resolution primitives |
 
 `from_file` and `local` paths are relative to the Order directory. Absolute paths
 and paths that normalize outside it are rejected. A file entry must obtain at
 least one effective Target prefix from itself or its Order.
+
+`mode` is supported on Unix targets and applies only to regular files. For a
+directory-backed `from_file` entry, it applies to every managed file below the
+Target, but not to directories or Target-only files. Blend corrects declared
+mode drift without prompting and keeps permission metadata separate from
+content reconciliation. When `mode` is omitted, replacing an existing file
+preserves its current permissions; newly created files retain the ordinary
+rendered-file or copied-source defaults.
+
+Choose a mode that still lets the account running Blend read the managed file
+when later content comparison is required. Modes that remove that access are
+enforced, but subsequent read commands report the content as unreadable and a
+sync may require an explicit Source-to-Target direction.
 
 ### Runtime metadata
 
