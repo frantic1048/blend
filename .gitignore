@@ -1,1 +1,4 @@
 /target
+/website/.astro
+/website/dist
+/website/node_modules

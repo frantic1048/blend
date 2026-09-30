@@ -28,3 +28,11 @@ clippy:
 # Run the test suite
 test:
     cargo test --locked
+
+# Install website dependencies
+website-install:
+    cd website && pnpm install --frozen-lockfile
+
+# Type-check and build the project website
+website-check:
+    cd website && pnpm check && pnpm build
