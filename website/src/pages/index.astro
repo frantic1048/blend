@@ -1,0 +1,202 @@
+---
+import Example from "../components/Example.astro";
+import Ornament from "../components/Ornament.astro";
+import Base from "../layouts/Base.astro";
+import assertSafety from "../examples/assert-safety.ncl?raw";
+import defaultWhenMissing from "../examples/default-when-missing.ncl?raw";
+import editorOrder from "../examples/editor.ncl?raw";
+import migrate from "../examples/migrate.ncl?raw";
+import ownSelected from "../examples/own-selected.ncl?raw";
+import plainFiles from "../examples/plain-files.ncl?raw";
+
+const repository = "https://github.com/frantic1048/blend";
+
+// Exact `blend view --content-only editor` output on macOS.
+const editorTarget = `font_size = 14
+plugins = [
+    "git",
+    "lsp",
+]
+theme = "latte"`;
+
+const menu = [
+  {
+    name: "Own only what you mean",
+    tag: "'Enforce",
+    description:
+      "Applications rewrite their own settings. Enforce the one field you care about and leave everything else to the app.",
+    code: ownSelected,
+  },
+  {
+    name: "Defaults that respect edits",
+    tag: "fun { target }",
+    description:
+      "A resolver sees the current Target value. Fill in a value only when it is missing; keep whatever the user chose.",
+    code: defaultWhenMissing,
+  },
+  {
+    name: "Migrations, served gently",
+    tag: "|> match",
+    description:
+      "Move known old values forward automatically, and hand anything unexpected back to you instead of guessing.",
+    code: migrate,
+  },
+  {
+    name: "Guard rails",
+    tag: "'Assert",
+    description:
+      "Check a safety property without silently repairing it. A failed assertion stops the Order and tells you why.",
+    code: assertSafety,
+  },
+  {
+    name: "Plain files, too",
+    tag: "from_file",
+    description:
+      "Not everything needs structure. Copy files and directories faithfully, with excludes, machine-local overlays, or symlinks.",
+    code: plainFiles,
+  },
+];
+---
+
+<Base
+  title="Blend — declarative dotfiles, thoughtfully reconciled"
+  description="Blend is a dotfile manager that composes configuration in Nickel and safely reconciles it with the files your applications use."
+>
+  <main id="main" class="home">
+    <section class="hero">
+      <p class="kicker smallcaps">A dotfile manager for macOS &amp; Linux</p>
+      <h1>Declarative dotfiles, <em>thoughtfully</em> reconciled.</h1>
+      <p class="lede">
+        Compose your configuration in <a href="https://nickel-lang.org/">Nickel</a>.
+        Blend renders it into the files your applications read, compares them by
+        meaning rather than bytes, and helps both sides meet safely.
+      </p>
+      <div class="actions">
+        <a class="button button-primary" href="/guide/">Read the guide</a>
+        <a class="button" href={repository}>View on GitHub</a>
+      </div>
+      <Example lang="sh" code="brew install frantic1048/tap/blend" />
+    </section>
+
+    <Ornament />
+
+    <section class="pairing" aria-labelledby="pairing-title">
+      <header class="section-head">
+        <p class="kicker smallcaps">The house blend</p>
+        <h2 id="pairing-title">One Order, one honest file.</h2>
+        <p>
+          An Order declares which files to produce and where. Ordinary Nickel
+          handles the differences between machines.
+        </p>
+      </header>
+      <div class="pairing-grid">
+        <Example caption="orders/editor/order.ncl" code={editorOrder} />
+        <div class="pairing-arrow smallcaps" aria-hidden="true">blend sync <span>→</span> on macOS</div>
+        <Example caption="~/.config/editor/settings.toml" lang="toml" code={editorTarget} />
+      </div>
+    </section>
+
+    <Ornament />
+
+    <section class="menu" aria-labelledby="menu-title">
+      <header class="section-head">
+        <p class="kicker smallcaps">On the menu</p>
+        <h2 id="menu-title">Say who owns each field.</h2>
+        <p>
+          Ordinary values ask you when Source and Target disagree. A small
+          vocabulary lets a declaration settle those differences on its own.
+        </p>
+      </header>
+      <ol class="menu-list">
+        {
+          menu.map((item) => (
+            <li class="menu-item">
+              <div class="menu-line">
+                <h3>{item.name}</h3>
+                <span class="menu-leader" aria-hidden="true" />
+                <code class="menu-tag">{item.tag}</code>
+              </div>
+              <p>{item.description}</p>
+              <Example code={item.code} />
+            </li>
+          ))
+        }
+      </ol>
+      <p class="menu-more">
+        <a href="/guide/#declaration-and-resolution">The full resolution vocabulary →</a>
+      </p>
+    </section>
+
+    <Ornament />
+
+    <section class="workflow" aria-labelledby="workflow-title">
+      <header class="section-head">
+        <p class="kicker smallcaps">How a sync goes</p>
+        <h2 id="workflow-title">Look first, then pour.</h2>
+      </header>
+      <ol class="workflow-steps">
+        <li>
+          <code>blend</code>
+          <p>Summarize which Orders agree with their Targets. Writes nothing.</p>
+        </li>
+        <li>
+          <code>blend view</code>
+          <p>Preview generated content and semantic differences. Writes nothing.</p>
+        </li>
+        <li>
+          <code>blend sync</code>
+          <p>Reconcile, choosing Source or Target per difference, or let declared policies decide.</p>
+        </li>
+      </ol>
+    </section>
+
+    <Ornament />
+
+    <section class="start" aria-labelledby="start-title">
+      <header class="section-head">
+        <p class="kicker smallcaps">First cup</p>
+        <h2 id="start-title">Start with a file you already have.</h2>
+      </header>
+      <Example
+        lang="sh"
+        code={`brew install frantic1048/tap/blend
+mkdir dotfiles && cd dotfiles
+blend init
+blend add git ~/.config/git`}
+      />
+      <details class="install-more">
+        <summary class="smallcaps">Other ways to install</summary>
+        <h3>Release installer</h3>
+        <p>Verifies the release checksum and installs to <code>~/.local/bin</code> by default.</p>
+        <Example
+          lang="sh"
+          code={`curl -fsSLO ${repository}/releases/latest/download/blend-installer.sh
+sh blend-installer.sh`}
+        />
+        <h3>Container</h3>
+        <p>The image entrypoint is <code>blend</code>.</p>
+        <Example
+          lang="sh"
+          code={`docker run --rm \\
+  -v "$PWD:/workspace" \\
+  -w /workspace \\
+  ghcr.io/frantic1048/blend:latest check`}
+        />
+        <h3>From source</h3>
+        <p>The binary is written to <code>target/release/blend</code>.</p>
+        <Example
+          lang="sh"
+          code={`git clone ${repository}.git
+cd blend
+cargo build --release`}
+        />
+        <p class="fine-print">
+          Release archives support Apple silicon macOS, Intel macOS, and x86-64 GNU/Linux.
+        </p>
+      </details>
+      <p class="start-next">
+        <a class="button button-primary" href="/guide/">Continue with the guide</a>
+      </p>
+    </section>
+  </main>
+</Base>

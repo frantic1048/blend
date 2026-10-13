@@ -1,0 +1,48 @@
+---
+import "../styles/typography.css";
+import "../styles/site.css";
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const repository = "https://github.com/frantic1048/blend";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#f8f1e6" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preload" href="/fonts/eb-garamond-variable.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/fraunces-variable.woff2" as="font" type="font/woff2" crossorigin />
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="masthead">
+      <a class="masthead-wordmark display" href="/">blend</a>
+      <nav class="masthead-nav smallcaps" aria-label="Primary">
+        <a href="/guide/">Guide</a>
+        <a href={repository}>GitHub</a>
+      </nav>
+    </header>
+
+    <slot />
+
+    <footer class="colophon">
+      <p class="smallcaps">Blend · declarative dotfiles, thoughtfully reconciled</p>
+      <nav class="smallcaps" aria-label="Footer">
+        <a href="/guide/">Guide</a>
+        <a href={`${repository}/releases`}>Releases</a>
+        <a href={repository}>GitHub</a>
+      </nav>
+    </footer>
+  </body>
+</html>

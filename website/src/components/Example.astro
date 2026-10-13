@@ -1,0 +1,18 @@
+---
+import { Code } from "astro:components";
+import coffee from "../shiki/coffee.ts";
+import nickel from "../shiki/nickel.ts";
+
+interface Props {
+  code: string;
+  lang?: "nickel" | "sh" | "toml";
+  caption?: string;
+}
+
+const { code, lang = "nickel", caption } = Astro.props;
+---
+
+<figure class="example">
+  {caption && <figcaption class="smallcaps">{caption}</figcaption>}
+  <Code code={code.trimEnd()} lang={lang === "nickel" ? nickel : lang} theme={coffee} />
+</figure>

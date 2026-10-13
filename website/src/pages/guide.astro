@@ -1,0 +1,57 @@
+---
+import { getEntry, render } from "astro:content";
+import Base from "../layouts/Base.astro";
+
+const guide = await getEntry("docs", "guide");
+if (!guide) {
+  throw new Error("docs/GUIDE.md was not loaded");
+}
+
+const { Content, headings } = await render(guide);
+
+// Group h3 entries under their h2 for the table of contents.
+const chapters: { slug: string; text: string; sections: { slug: string; text: string }[] }[] = [];
+for (const heading of headings) {
+  if (heading.depth === 2) {
+    chapters.push({ slug: heading.slug, text: heading.text, sections: [] });
+  } else if (heading.depth === 3) {
+    chapters.at(-1)?.sections.push({ slug: heading.slug, text: heading.text });
+  }
+}
+---
+
+<Base
+  title="User guide — Blend"
+  description="How to write Blend Orders, compose configuration in Nickel, and reconcile it safely with application files."
+>
+  <div class="guide-layout">
+    <nav class="guide-toc" aria-labelledby="toc-title">
+      <details>
+        <summary id="toc-title" class="smallcaps">Contents</summary>
+        <ol>
+          {
+            chapters.map((chapter) => (
+              <li>
+                <a href={`#${chapter.slug}`}>{chapter.text}</a>
+                {chapter.sections.length > 0 && (
+                  <ol>
+                    {chapter.sections.map((section) => (
+                      <li>
+                        <a href={`#${section.slug}`}>{section.text}</a>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </li>
+            ))
+          }
+        </ol>
+      </details>
+    </nav>
+
+    <main id="main" class="prose">
+      <p class="kicker smallcaps">Blend documentation</p>
+      <Content />
+    </main>
+  </div>
+</Base>
