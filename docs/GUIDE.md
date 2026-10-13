@@ -16,7 +16,7 @@ them.
 
 Each file entry uses exactly one source mode:
 
-| Mode | Source representation | Target deployment | Target-to-Source behavior |
+| Mode | Source | Deployed as | Reverse sync |
 | --- | --- | --- | --- |
 | `from_file` | A literal file or directory inside the Order | Copy or intentional symlink | Copies target content back; directories respect excludes and local overlays |
 | `from_config` | Nickel values and resolver functions | Rendered configuration | Rewrites concrete declaration leaves where safe; resolver logic and non-rewritable expressions require manual editing |
@@ -237,7 +237,7 @@ Declarative resolution uses a small enriched Nickel vocabulary:
 | `'Enforce value` | Enforce the exact whole value |
 | `'Absent` | Remove the field or resource |
 | `'Assert expected` | Require the Target to match; fail without repairing it |
-| `'Assert fun { target } => ...` | Require the predicate to hold |
+| `'Assert (fun { target } => ...)` | Require the predicate to hold |
 | `'Unmanaged` | Outside Blend ownership; neither reconcile nor prompt |
 | `'Unresolved` | Explicit resolver fallback to interactive/manual handling |
 | `blend.with_target_only policy` | Apply a policy to Target children absent from Source |
@@ -330,7 +330,8 @@ plugins =
   }
   |> blend.with_target_only (
     fun { key, value } =>
-      match key {
+      key
+      |> match {
         "legacy_plugin" => 'Absent,
         "runtime_plugin" => 'Unmanaged,
         "optional_plugin" => value,
@@ -359,7 +360,8 @@ An existing value is preserved; a missing field is created as `30`.
 ```nickel
 mode =
   fun { target } =>
-    match target {
+    target
+    |> match {
       "legacy" => "modern",
       "modern" => target,
       _ => 'Unresolved,
@@ -374,8 +376,8 @@ Known states resolve automatically. Unknown states retain an explicit fallback.
 auth_token = 'Assert 'Absent,
 
 PermitRootLogin =
-  'Assert fun { target } =>
-    target != "yes",
+  'Assert (fun { target } =>
+    target != "yes"),
 ```
 
 Assertions verify without silently repairing the Target.

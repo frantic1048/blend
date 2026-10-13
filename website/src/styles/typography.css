@@ -1,0 +1,193 @@
+/*
+ * Vendored variable fonts (SIL OFL 1.1, licenses beside the files).
+ * Subset to Latin, general punctuation, arrows, and box drawing; every
+ * OpenType feature and variation axis is retained.
+ */
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/fraunces-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/fraunces-italic-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "EB Garamond";
+  src: url("/fonts/eb-garamond-variable.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "EB Garamond";
+  src: url("/fonts/eb-garamond-italic-variable.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-variable.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-italic-variable.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-text: "EB Garamond", "Iowan Old Style", Palatino, Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Fraunces character axes: SOFT 0–100 rounds terminals, WONK 0–1 swaps in quirky glyphs. */
+  --display-soft: 0;
+  --display-wonk: 0;
+
+  /* EB Garamond has a small x-height; body text runs larger than usual. */
+  --text-size: clamp(1.15rem, 1rem + 0.45vw, 1.3rem);
+  --text-leading: 1.6;
+  --measure: 68ch;
+
+  /* JetBrains Mono has a tall x-height; scale it down to sit beside Garamond. */
+  --code-scale: 0.8em;
+
+  --step-h1: clamp(2.8rem, 1.6rem + 5vw, 5.6rem);
+  --step-h2: clamp(2rem, 1.4rem + 2.4vw, 3.2rem);
+  --step-h3: clamp(1.4rem, 1.15rem + 1vw, 1.85rem);
+  --step-h4: 1.1em;
+}
+
+html {
+  font-family: var(--font-text);
+  font-size: 100%;
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-size: var(--text-size);
+  line-height: var(--text-leading);
+  font-variant-numeric: oldstyle-nums proportional-nums;
+}
+
+p,
+li,
+dd,
+blockquote {
+  hanging-punctuation: first last;
+  text-wrap: pretty;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-style: normal;
+  font-variation-settings:
+    "SOFT" var(--display-soft),
+    "WONK" var(--display-wonk);
+  font-variant-numeric: lining-nums;
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--step-h1);
+  font-weight: 560;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--step-h2);
+  font-weight: 540;
+  letter-spacing: -0.005em;
+}
+
+h3 {
+  font-size: var(--step-h3);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+h4 {
+  font-family: var(--font-text);
+  font-size: var(--step-h4);
+  font-weight: 600;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+}
+
+em,
+i {
+  font-style: italic;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-variant-numeric: lining-nums tabular-nums;
+  /* JetBrains Mono draws its code ligatures (`=>`, `|>`, `!=`) through `calt`. */
+  font-variant-ligatures: contextual;
+  hanging-punctuation: none;
+}
+
+:not(pre) > code,
+kbd {
+  font-size: var(--code-scale);
+}
+
+pre {
+  font-size: clamp(0.78rem, 0.72rem + 0.2vw, 0.88rem);
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+table {
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+/* Menu-board labels: Garamond true small caps, never faux capitals. */
+.smallcaps {
+  font-family: var(--font-text);
+  font-variant-caps: all-small-caps;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+
+.display {
+  font-family: var(--font-display);
+  font-variation-settings:
+    "SOFT" var(--display-soft),
+    "WONK" var(--display-wonk);
+}
