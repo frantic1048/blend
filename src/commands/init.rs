@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::{Context as AnyhowContext, bail};
 
 use crate::commands::sync::cmd_sync;
@@ -19,7 +17,9 @@ pub fn cmd_init(ctx: &Context, upgrade: bool) -> anyhow::Result<()> {
         return managed_files::assert_orders_ready(&ctx.orders_dir);
     }
 
-    let should_create_starter = !starter_path(ctx).exists();
+    // Source discovery uses orders/ as the checkout boundary. The blend Order
+    // is optional and must not determine whether an existing Source is new.
+    let should_create_starter = !ctx.orders_dir.is_dir();
     if should_create_starter {
         ensure_scaffold_target_clean(ctx)?;
     }
@@ -41,10 +41,6 @@ pub fn cmd_init(ctx: &Context, upgrade: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn starter_path(ctx: &Context) -> std::path::PathBuf {
-    ctx.orders_dir.join("blend").join("order.ncl")
-}
-
 fn ensure_scaffold_target_clean(ctx: &Context) -> anyhow::Result<()> {
     if !ctx.blend_dir.exists() {
         return Ok(());
@@ -58,11 +54,12 @@ fn ensure_scaffold_target_clean(ctx: &Context) -> anyhow::Result<()> {
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let path = entry.path();
-
         match name.as_ref() {
             ".git" => {}
-            "orders" if is_clean_initial_orders_dir(&path)? => {}
+            "orders" => bail!(
+                "{} is not a directory. `blend init` requires orders/ to be a directory.",
+                ctx.orders_dir.display()
+            ),
             _ => dirty.push(name.into_owned()),
         }
     }
@@ -79,47 +76,12 @@ fn ensure_scaffold_target_clean(ctx: &Context) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_clean_initial_orders_dir(path: &Path) -> anyhow::Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-
-    for entry in
-        std::fs::read_dir(path).with_context(|| format!("Failed to read {}", path.display()))?
-    {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let entry_path = entry.path();
-
-        match name.as_ref() {
-            "order.contract.ncl" | "metadata.ncl" => {}
-            "blend" if is_empty_dir(&entry_path)? => {}
-            _ => return Ok(false),
-        }
-    }
-
-    Ok(true)
-}
-
-fn is_empty_dir(path: &Path) -> anyhow::Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-
-    Ok(std::fs::read_dir(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?
-        .next()
-        .transpose()?
-        .is_none())
-}
-
 fn write_blend_starter(ctx: &Context) -> anyhow::Result<()> {
     let order_dir = ctx.orders_dir.join("blend");
     std::fs::create_dir_all(&order_dir)
         .with_context(|| format!("Failed to create {}", order_dir.display()))?;
 
-    let path = starter_path(ctx);
+    let path = order_dir.join("order.ncl");
     std::fs::write(&path, starter_ncl())
         .with_context(|| format!("Failed to write {}", path.display()))?;
     log::info(&format!("created {}", path.display()));
@@ -152,15 +114,17 @@ mod tests {
     use clap::Parser;
     use tempfile::TempDir;
 
-    fn ctx_for(orders: &std::path::Path) -> Context {
+    fn ctx_for(root: &std::path::Path) -> Context {
         let cli = Cli::parse_from([
             "blend",
             "--blend-dir",
-            orders.to_str().unwrap(),
+            root.to_str().unwrap(),
             "--home",
-            orders.to_str().unwrap(), // home doesn't matter for init
+            root.to_str().unwrap(),
         ]);
-        Context::new(&cli).unwrap()
+        let mut ctx = Context::new(&cli).unwrap();
+        ctx.state = crate::state::StateStore::with_root(root.join(".state/snapshots"));
+        ctx
     }
 
     #[test]
@@ -192,6 +156,138 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("not clean enough"), "got: {msg}");
         assert!(!tmp.path().join("orders/order.contract.ncl").exists());
+    }
+
+    #[test]
+    fn cmd_init_reports_orders_file_without_writes() {
+        let tmp = TempDir::new().unwrap();
+        let orders_path = tmp.path().join("orders");
+        std::fs::write(&orders_path, "user file\n").unwrap();
+        let ctx = ctx_for(tmp.path());
+
+        for upgrade in [false, true] {
+            let err = cmd_init(&ctx, upgrade).unwrap_err();
+            assert!(
+                err.to_string().contains("orders is not a directory"),
+                "got: {err}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&orders_path).unwrap(),
+                "user file\n"
+            );
+            assert!(!tmp.path().join(".config").exists());
+            assert!(!tmp.path().join(".state").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cmd_init_reports_broken_orders_symlink_without_writes() {
+        let tmp = TempDir::new().unwrap();
+        let orders_path = tmp.path().join("orders");
+        std::os::unix::fs::symlink("missing-orders", &orders_path).unwrap();
+        let ctx = ctx_for(tmp.path());
+
+        for upgrade in [false, true] {
+            let err = cmd_init(&ctx, upgrade).unwrap_err();
+            assert!(
+                err.to_string().contains("orders is not a directory"),
+                "got: {err}"
+            );
+            assert_eq!(
+                std::fs::read_link(&orders_path).unwrap(),
+                std::path::Path::new("missing-orders")
+            );
+            assert!(!tmp.path().join("missing-orders").exists());
+            assert!(!tmp.path().join(".config").exists());
+            assert!(!tmp.path().join(".state").exists());
+        }
+    }
+
+    #[test]
+    fn cmd_init_refreshes_existing_source_without_blend_order() {
+        let tmp = TempDir::new().unwrap();
+        let order_dir = tmp.path().join("orders/example");
+        std::fs::create_dir_all(&order_dir).unwrap();
+        let order = "{ example = { prefix = [\"~/.config/example/\"], files = [{ from_file = \"config.txt\" }] } }\n";
+        std::fs::write(order_dir.join("order.ncl"), order).unwrap();
+        std::fs::write(order_dir.join("config.txt"), "user config\n").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "existing Source\n").unwrap();
+        std::fs::write(
+            tmp.path().join("orders/order.contract.ncl"),
+            "{\n  contract_version = 3,\n}\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("orders/metadata.ncl"), "stale metadata\n").unwrap();
+
+        let ctx = ctx_for(tmp.path());
+        cmd_init(&ctx, false).unwrap();
+
+        managed_files::assert_orders_ready(&ctx.orders_dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(order_dir.join("order.ncl")).unwrap(),
+            order
+        );
+        assert_eq!(
+            std::fs::read_to_string(order_dir.join("config.txt")).unwrap(),
+            "user config\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("README.md")).unwrap(),
+            "existing Source\n"
+        );
+        assert!(!ctx.orders_dir.join("blend").exists());
+        assert!(!tmp.path().join(".config").exists());
+        assert!(!tmp.path().join(".state").exists());
+    }
+
+    #[test]
+    fn cmd_init_upgrades_existing_source_without_blend_order() {
+        let tmp = TempDir::new().unwrap();
+        let order_dir = tmp.path().join("orders/example");
+        std::fs::create_dir_all(&order_dir).unwrap();
+        let order = "{ example = { files = [] } }\n";
+        std::fs::write(order_dir.join("order.ncl"), order).unwrap();
+        std::fs::write(tmp.path().join("README.md"), "existing Source\n").unwrap();
+        let contract = "{\n  contract_version = 2,\n}\n";
+        let contract_path = tmp.path().join("orders/order.contract.ncl");
+        std::fs::write(&contract_path, contract).unwrap();
+
+        let ctx = ctx_for(tmp.path());
+        let err = cmd_init(&ctx, false).unwrap_err();
+        assert!(
+            err.to_string().contains("blend init --upgrade"),
+            "got: {err}"
+        );
+        assert_eq!(std::fs::read_to_string(&contract_path).unwrap(), contract);
+        assert!(!ctx.orders_dir.join("metadata.ncl").exists());
+        assert!(!ctx.orders_dir.join("blend").exists());
+
+        cmd_init(&ctx, true).unwrap();
+
+        managed_files::assert_orders_ready(&ctx.orders_dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(order_dir.join("order.ncl")).unwrap(),
+            order
+        );
+        assert!(!ctx.orders_dir.join("blend").exists());
+        assert!(!tmp.path().join(".config").exists());
+        assert!(!tmp.path().join(".state").exists());
+    }
+
+    #[test]
+    fn cmd_init_refreshes_empty_orders_dir_without_starter() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("orders")).unwrap();
+        std::fs::write(tmp.path().join("README.md"), "existing Source\n").unwrap();
+        let ctx = ctx_for(tmp.path());
+
+        cmd_init(&ctx, false).unwrap();
+
+        managed_files::assert_orders_ready(&ctx.orders_dir).unwrap();
+        assert!(!ctx.orders_dir.join("blend").exists());
+        assert!(!tmp.path().join(".config").exists());
+        assert!(!tmp.path().join(".state").exists());
     }
 
     #[test]

@@ -39,7 +39,10 @@ dotfiles/
 ```
 
 `blend init` creates or refreshes the generated contract and metadata modules.
-For a new Source root it also creates the initial Blend configuration.
+When `orders/` already exists, it only refreshes those modules; the
+`orders/blend/order.ncl` configuration Order is optional. When `orders/` is
+absent, it also creates and deploys the initial Blend configuration after
+checking that the Source root is empty apart from an optional `.git` entry.
 `blend create <order>` scaffolds an empty Order. `blend add` imports an existing
 absolute or `~`-prefixed Target as `from_file` Source:
 

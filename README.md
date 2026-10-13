@@ -88,9 +88,12 @@ cd dotfiles
 blend init
 ```
 
-`blend init` creates the generated Order contract, metadata defaults, and a
-starter Blend configuration. Import an existing target file or directory as a
-literal source entry:
+`blend init` creates or refreshes the generated Order contract and metadata
+defaults. It creates and deploys a starter Blend configuration only when
+`orders/` is absent. Existing Source trees do not need an
+`orders/blend/order.ncl` Order.
+
+Import an existing target file or directory as a literal source entry:
 
 ```sh
 blend add git ~/.config/git

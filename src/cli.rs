@@ -179,7 +179,7 @@ Creates the order when it does not exist, copies the Target path into its Source
     #[command(long_about = "\
 [source, target] Initialize or refresh Blend metadata and config
 
-Writes or refreshes orders/order.contract.ncl and orders/metadata.ncl. For a new Source root, also creates a starter blend order and deploys its config to Target. If no Source root is found, init bootstraps the current directory.")]
+Writes or refreshes orders/order.contract.ncl and orders/metadata.ncl. When the selected Source root has no orders/ directory, also creates a starter blend Order and deploys its config to Target. Existing Source roots only refresh generated files; their blend Order is optional. If no Source root is found, init bootstraps the current directory.")]
     Init {
         /// Apply breaking contract migrations (required when upgrading across breaking versions)
         #[arg(long)]
