@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/frantic1048/blend/compare/blend-v0.3.3...blend-v0.3.4) - 2026-10-13
+
+### Fixed
+- *(init)* refresh existing sources without a blend order
+
 ## [0.3.3](https://github.com/frantic1048/blend/compare/blend-v0.3.2...blend-v0.3.3) - 2026-09-30
 
 ### Added
