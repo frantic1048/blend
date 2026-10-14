@@ -1,0 +1,8 @@
+/.well-known/ard.json
+  Content-Type: application/json; charset=utf-8
+
+/guide.md
+  Content-Type: text/markdown; charset=utf-8
+
+/llms.txt
+  Content-Type: text/plain; charset=utf-8

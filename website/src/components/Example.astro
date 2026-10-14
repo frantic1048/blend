@@ -1,18 +1,38 @@
 ---
 import { Code } from "astro:components";
+import type { ShikiTransformer } from "shiki";
+import blendOutput from "../shiki/blend-output.ts";
 import coffee from "../shiki/coffee.ts";
 import nickel from "../shiki/nickel.ts";
 
 interface Props {
   code: string;
-  lang?: "nickel" | "sh" | "toml";
+  lang?: "nickel" | "sh" | "toml" | "blend-output";
   caption?: string;
+  /** 1-based line numbers to highlight as changed. */
+  mark?: number[];
+  /** Soft-wrap long lines instead of scrolling them. */
+  wrap?: boolean;
 }
 
-const { code, lang = "nickel", caption } = Astro.props;
+const { code, lang = "nickel", caption, mark = [], wrap = false } = Astro.props;
+const grammars = { nickel, "blend-output": blendOutput } as const;
+
+const transformers: ShikiTransformer[] = [
+  {
+    line(node, line) {
+      if (mark.includes(line)) this.addClassToHast(node, "mark");
+    },
+  },
+];
 ---
 
-<figure class="example">
+<figure class:list={["example", { "example-wrap": wrap }]}>
   {caption && <figcaption class="smallcaps">{caption}</figcaption>}
-  <Code code={code.trimEnd()} lang={lang === "nickel" ? nickel : lang} theme={coffee} />
+  <Code
+    code={code.trimEnd()}
+    lang={lang === "nickel" || lang === "blend-output" ? grammars[lang] : lang}
+    theme={coffee}
+    transformers={transformers}
+  />
 </figure>

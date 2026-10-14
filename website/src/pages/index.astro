@@ -19,6 +19,50 @@ plugins = [
 ]
 theme = "latte"`;
 
+// The reconciliation scene is a real session against the editor Order above:
+// the Target was edited, then synced Target -> Source key by key.
+const editedTarget = `font_size = 16
+plugins = [
+    "git",
+    "lsp",
+]
+theme = "mocha"`;
+
+const viewOutput = `$ blend view editor
+editor
+  settings.toml -> ~/.config/editor/settings.toml
+    ~ font_size
+      << Source: 14
+      >> Target: 16
+    ~ theme
+      << Source: "latte"
+      >> Target: "mocha"`;
+
+const syncPrompt = `$ blend sync editor
+  editor:settings.toml (~/.config/editor/settings.toml)
+    ~ font_size
+      << Source: 14
+      >> Target: 16
+      || Base: 14
+    [snapshot] font_size: Target changed (suggests Target)
+    [s]ource  [t]arget  s[k]ip  [a]ll-source  a[l]l-target  [q]uit: t`;
+
+const rewritten = `from_config = {
+  theme = "mocha",
+  font_size =
+    if metadata.os == "darwin" then 16 else 12,
+  plugins = ["git", "lsp"],
+},`;
+
+// The same sync against a variant where font_size is computed.
+const computed = `from_config = {
+  theme = "mocha",
+  font_size = base_size + 2,
+  plugins = ["git", "lsp"],
+},`;
+
+const formats = ["TOML", "JSON & JSONC", "YAML", "Plaintext"];
+
 const menu = [
   {
     name: "Own only what you mean",
@@ -60,7 +104,12 @@ const menu = [
 
 <Base
   title="Blend — declarative dotfiles, thoughtfully reconciled"
-  description="Blend is a dotfile manager that composes configuration in Nickel and safely reconciles it with the files your applications use."
+  description="Blend is a dotfile manager for macOS and Linux. Compose configuration in Nickel, compare it with deployed files by meaning, and reconcile changes in either direction."
+  path="/"
+  image={{
+    path: "/og/home.png",
+    alt: "The Blend wordmark, with a winged spoon stirring its underline, beside the headline “Declarative dotfiles, thoughtfully reconciled.”",
+  }}
 >
   <main id="main" class="home">
     <section class="hero">
@@ -94,6 +143,77 @@ const menu = [
         <div class="pairing-arrow smallcaps" aria-hidden="true">blend sync <span>→</span> on macOS</div>
         <Example caption="~/.config/editor/settings.toml" lang="toml" code={editorTarget} />
       </div>
+      <div class="formats">
+        <p class="smallcaps" id="formats-label">Renders and compares</p>
+        <ul aria-labelledby="formats-label">
+          {formats.map((format) => <li>{format}</li>)}
+          <li><code>key value</code> lines</li>
+          <li><code>key=value</code> lines</li>
+        </ul>
+        <a href="/guide/#formats">Format details →</a>
+      </div>
+    </section>
+
+    <Ornament />
+
+    <section class="reconcile" aria-labelledby="reconcile-title">
+      <header class="section-head">
+        <p class="kicker smallcaps">The return pour</p>
+        <h2 id="reconcile-title">Then the file talks back.</h2>
+        <p>
+          Applications rewrite their settings, and so do you. Blend notices,
+          explains the change by meaning, and lets you choose which side
+          wins, even carrying the edit back into your Nickel.
+        </p>
+      </header>
+      <ol class="scene">
+        <li>
+          <h3>The app changes a value</h3>
+          <p>You pick a darker theme and a larger font in the editor. The Target no longer matches its Source.</p>
+          <Example caption="~/.config/editor/settings.toml" lang="toml" code={editedTarget} mark={[1, 6]} />
+        </li>
+        <li>
+          <h3>Blend explains it by meaning</h3>
+          <p>
+            <code>blend view</code> compares parsed values, not lines, so reformatting or
+            reordering keys is not a difference. Changed values are.
+          </p>
+          <Example lang="blend-output" code={viewOutput} />
+        </li>
+        <li>
+          <h3>You choose a direction</h3>
+          <p>
+            <code>blend sync</code> asks per key. The last sync’s snapshot shows which side
+            moved. Source rewrites the file; Target adopts the edit.
+          </p>
+          <Example lang="blend-output" code={syncPrompt} wrap />
+        </li>
+      </ol>
+      <div class="outcomes">
+        <div class="outcome">
+          <h3>Rewritten in your declaration</h3>
+          <p>
+            A concrete value is edited in place, even inside the active branch of
+            a condition: the macOS size becomes 16 and Linux keeps 12.
+          </p>
+          <Example caption="orders/editor/order.ncl" code={rewritten} mark={[2, 4]} />
+        </div>
+        <div class="outcome">
+          <h3>Handed back to you</h3>
+          <p>
+            A computed value has no single literal to rewrite. Blend adopts what
+            it safely can, says what it could not, and keeps reporting the
+            difference until you edit the declaration.
+          </p>
+          <Example caption="orders/editor/order.ncl" code={computed} mark={[2]} />
+          <p class="outcome-message">
+            <samp>Cannot apply Target -> Source for font_size: unsupported expression type (update order.ncl manually)</samp>
+          </p>
+        </div>
+      </div>
+      <p class="reconcile-more">
+        <a href="/guide/#snapshots-and-reverse-sync">What reverse sync can rewrite →</a>
+      </p>
     </section>
 
     <Ornament />
@@ -103,8 +223,9 @@ const menu = [
         <p class="kicker smallcaps">On the menu</p>
         <h2 id="menu-title">Say who owns each field.</h2>
         <p>
-          Ordinary values ask you when Source and Target disagree. A small
-          vocabulary lets a declaration settle those differences on its own.
+          Choosing a side by hand suits a one-off change. For differences that
+          keep coming back, a small vocabulary lets the declaration settle them
+          on its own.
         </p>
       </header>
       <ol class="menu-list">
@@ -170,7 +291,9 @@ blend add git ~/.config/git`}
         <p>Verifies the release checksum and installs to <code>~/.local/bin</code> by default.</p>
         <Example
           lang="sh"
-          code={`curl -fsSLO ${repository}/releases/latest/download/blend-installer.sh
+          wrap
+          code={`release=${repository}/releases/latest/download
+curl -fsSLO "$release/blend-installer.sh"
 sh blend-installer.sh`}
         />
         <h3>Container</h3>

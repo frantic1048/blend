@@ -1,14 +1,22 @@
 ---
 import "../styles/typography.css";
 import "../styles/site.css";
+import masthead from "../brand/masthead.svg?raw";
 
 interface Props {
   title: string;
   description: string;
+  /** Canonical path of the page, with a trailing slash. */
+  path: string;
+  type?: "website" | "article";
+  image: { path: string; alt: string };
 }
 
-const { title, description } = Astro.props;
+const { title, description, path, type = "website", image } = Astro.props;
 const repository = "https://github.com/frantic1048/blend";
+const site = Astro.site ?? new URL("https://blend.pyonpyon.today");
+const canonical = new URL(path, site).href;
+const imageUrl = new URL(image.path, site).href;
 ---
 
 <!doctype html>
@@ -16,18 +24,40 @@ const repository = "https://github.com/frantic1048/blend";
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
+    <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
     <meta name="theme-color" content="#f8f1e6" />
+
+    <meta property="og:site_name" content="Blend" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:type" content={type} />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content={imageUrl} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={image.alt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={imageUrl} />
+    <meta name="twitter:image:alt" content={image.alt} />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="mask-icon" href="/brand/blend-mark-mono.svg" color="#2b1d16" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="ard" href="/.well-known/ard.json" />
     <link rel="preload" href="/fonts/eb-garamond-variable.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/fraunces-variable.woff2" as="font" type="font/woff2" crossorigin />
-    <title>{title}</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="masthead">
-      <a class="masthead-wordmark display" href="/">blend</a>
+      <a class="masthead-wordmark" href="/" aria-label="Blend home" set:html={masthead} />
       <nav class="masthead-nav smallcaps" aria-label="Primary">
         <a href="/guide/">Guide</a>
         <a href={repository}>GitHub</a>

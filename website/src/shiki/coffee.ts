@@ -7,7 +7,7 @@ const palette = {
   foam: "#f1e4d0",
   latte: "#e2cfb4",
   steam: "#b39a86",
-  grounds: "#9a8270",
+  grounds: "#a08876",
   cinnamon: "#e8956f",
   honey: "#e9bb74",
   matcha: "#bcc78e",

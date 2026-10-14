@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Agentmap: https://blend.pyonpyon.today/.well-known/ard.json

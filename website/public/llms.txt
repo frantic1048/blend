@@ -1,0 +1,17 @@
+# Blend
+
+> Blend is a dotfile manager for macOS and Linux. Configuration is composed in Nickel, rendered to the files applications read, compared with those files by meaning, and reconciled in either direction.
+
+Blend works with two views of a configuration. The Source is a checkout of `orders/<name>/order.ncl` files; the Target is the deployed file an application reads. `blend view` explains differences without writing, and `blend sync` reconciles them: Source to Target rewrites the deployed file, while Target to Source carries an application's edit back into the Nickel declaration where a concrete value can be rewritten safely. Ownership policies in the Order can settle recurring differences automatically. Structured output covers TOML, JSON, JSONC, YAML, plaintext, and simple `key value` / `key=value` line formats.
+
+## Docs
+
+- [User guide](https://blend.pyonpyon.today/guide/): Orders, Nickel composition, formats, inspecting, reconciling, and safety boundaries
+- [User guide (Markdown)](https://blend.pyonpyon.today/guide.md): the same guide as raw Markdown, from docs/GUIDE.md in the repository
+- [README](https://github.com/frantic1048/blend/blob/main/README.md): overview, installation, and a first example
+
+## Project
+
+- [Homepage](https://blend.pyonpyon.today/): an introduction with worked examples
+- [Source repository](https://github.com/frantic1048/blend): code, issues, and the canonical documentation
+- [Releases](https://github.com/frantic1048/blend/releases): prebuilt archives for Apple silicon macOS, Intel macOS, and x86-64 GNU/Linux, plus the release installer

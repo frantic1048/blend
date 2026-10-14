@@ -91,11 +91,34 @@ a:hover {
 }
 
 .masthead-wordmark {
+  display: block;
+  align-self: center;
   color: var(--espresso);
-  font-size: 1.9rem;
-  font-style: italic;
-  font-weight: 500;
-  text-decoration: none;
+}
+
+/* The spoon's tail dips below the rule; let it use some of the masthead's
+   bottom padding without reaching the border. */
+.masthead-wordmark svg {
+  display: block;
+  width: auto;
+  height: 3.4rem;
+  margin-block: 0.2rem -0.6rem;
+}
+
+.masthead-wordmark:hover {
+  color: var(--roast);
+}
+
+/* The fog is decoration; system colours keep only the crisp lockup. */
+@media (forced-colors: active) {
+  .blend-fog {
+    display: none;
+  }
+
+  .blend-spoon {
+    fill: currentColor;
+    filter: none;
+  }
 }
 
 .masthead-nav,
@@ -330,7 +353,7 @@ pre.astro-code[data-language]:not([data-language="text"], [data-language="plaint
   position: absolute;
   top: 0.35rem;
   right: 0.7rem;
-  color: #9a8270;
+  color: #a08876;
   font-family: var(--font-text);
   font-size: 0.95rem;
   font-variant-caps: all-small-caps;
@@ -341,6 +364,22 @@ pre.astro-code code {
   display: block;
   width: max-content;
   min-width: 100%;
+}
+
+/* Changed lines: a caramel rule in the gutter and a faint wash. */
+pre.astro-code .line.mark {
+  display: inline-block;
+  min-width: calc(100% + 2.6rem);
+  margin-inline: -1.3rem;
+  padding-inline: calc(1.3rem - 3px) 1.3rem;
+  border-left: 3px solid var(--caramel-bright);
+  background: rgb(196 137 74 / 16%);
+}
+
+.example-wrap pre.astro-code code {
+  width: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Tables: menu-style rows with no vertical rules. */
@@ -381,6 +420,27 @@ pre.astro-code code {
 
 .prose tr:last-child td {
   border-bottom: 0;
+}
+
+/* On phones, wrap cells rather than scroll the table sideways. */
+@media (max-width: 36rem) {
+  .prose table {
+    display: table;
+    font-size: 0.85em;
+  }
+
+  .prose th,
+  .prose td,
+  .prose td:first-child {
+    padding-right: 0.45rem;
+    white-space: normal;
+    hyphens: auto;
+  }
+
+  .prose td code {
+    overflow-wrap: anywhere;
+    hyphens: manual;
+  }
 }
 
 /* Buttons */
@@ -551,10 +611,147 @@ pre.astro-code code {
   }
 }
 
+.formats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3rem 1.2rem;
+  max-width: 52rem;
+  margin: 2.6rem auto 0;
+  padding-top: 1.1rem;
+  border-top: 1px dotted var(--rule);
+  text-align: center;
+}
+
+.formats p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 1.05rem;
+}
+
+.formats ul {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--espresso);
+}
+
+.formats li + li::before {
+  content: "·";
+  margin-inline: 0.55rem;
+  color: var(--caramel-bright);
+}
+
+.formats a {
+  font-size: 0.95em;
+}
+
+/* Reconciliation scene: numbered beats, then the two possible outcomes. */
+
+.scene {
+  display: grid;
+  gap: 2.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: beat;
+}
+
+.scene > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
+  gap: 0.4rem 2.2rem;
+  align-items: start;
+  counter-increment: beat;
+}
+
+.scene > li > :not(.example) {
+  grid-column: 1;
+}
+
+.scene .example {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.scene h3,
+.outcome h3 {
+  margin: 0;
+  color: var(--espresso);
+  font-size: var(--step-h3);
+}
+
+.scene h3::before {
+  content: counter(beat, lower-roman) ".";
+  margin-right: 0.45em;
+  color: var(--caramel-bright);
+  font-style: italic;
+  font-weight: 460;
+}
+
+.scene p,
+.outcome p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.outcomes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.2rem;
+  margin-top: 3.2rem;
+  padding-top: 2.4rem;
+  border-top: 1px solid var(--rule);
+}
+
+.outcome {
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+}
+
+.outcome .example {
+  margin-top: 0.4rem;
+}
+
+.home .outcome-message {
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--rule);
+  font-size: 0.95em;
+}
+
+.outcome-message samp {
+  font-size: var(--code-scale);
+  overflow-wrap: anywhere;
+}
+
+.reconcile-more {
+  margin: 2.6rem 0 0;
+  text-align: center;
+}
+
+@media (max-width: 52rem) {
+  .scene > li,
+  .outcomes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scene .example {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: 0.6rem;
+  }
+}
+
 /* Menu-card list with dotted leaders. */
 
 .menu-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 3.2rem;
   max-width: 48rem;
   margin: 0 auto;
