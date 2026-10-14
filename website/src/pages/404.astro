@@ -1,0 +1,24 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Page not found — Blend"
+  description="This page is not on the menu."
+  image={{
+    path: "/og/home.png",
+    alt: "The Blend wordmark, with a winged spoon stirring its underline, beside the headline “Declarative dotfiles, thoughtfully reconciled.”",
+  }}
+>
+  <main id="main" class="home">
+    <section class="hero">
+      <p class="kicker smallcaps">404 · Not found</p>
+      <h1>This page is <em>not</em> on the menu.</h1>
+      <p class="lede">The page you asked for doesn’t exist, or it has moved.</p>
+      <div class="actions">
+        <a class="button button-primary" href="/">Back to the homepage</a>
+        <a class="button" href="/guide/">Read the guide</a>
+      </div>
+    </section>
+  </main>
+</Base>

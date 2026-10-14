@@ -6,8 +6,8 @@ import masthead from "../brand/masthead.svg?raw";
 interface Props {
   title: string;
   description: string;
-  /** Canonical path of the page, with a trailing slash. */
-  path: string;
+  /** Canonical path of the page, with a trailing slash. Omit for pages that should not be indexed. */
+  path?: string;
   type?: "website" | "article";
   image: { path: string; alt: string };
 }
@@ -15,7 +15,7 @@ interface Props {
 const { title, description, path, type = "website", image } = Astro.props;
 const repository = "https://github.com/frantic1048/blend";
 const site = Astro.site ?? new URL("https://blend.pyonpyon.today");
-const canonical = new URL(path, site).href;
+const canonical = path === undefined ? undefined : new URL(path, site).href;
 const imageUrl = new URL(image.path, site).href;
 ---
 
@@ -26,13 +26,13 @@ const imageUrl = new URL(image.path, site).href;
     <meta name="viewport" content="width=device-width" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <link rel="canonical" href={canonical} />
+    {canonical ? <link rel="canonical" href={canonical} /> : <meta name="robots" content="noindex" />}
     <meta name="theme-color" content="#f8f1e6" />
 
     <meta property="og:site_name" content="Blend" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
+    {canonical && <meta property="og:url" content={canonical} />}
     <meta property="og:type" content={type} />
     <meta property="og:locale" content="en_US" />
     <meta property="og:image" content={imageUrl} />
