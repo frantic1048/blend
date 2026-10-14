@@ -18,6 +18,6 @@
     "ajv-formats": "3.0.1",
     "astro": "7.3.3",
     "shiki": "4.4.3",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   }
 }
