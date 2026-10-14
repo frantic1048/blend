@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "docs/GUIDE.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"
   pull_request:
     paths:
       - "website/**"
+      - "docs/GUIDE.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"
 

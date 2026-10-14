@@ -310,8 +310,16 @@ CI uses Harden Runner with an outbound allowlist.
 `release-plz` owns release PRs, `CHANGELOG.md`, and `blend-v<version>` tags.
 The repository is configured for Git-only releases:
 Cargo publication and release creation are disabled in release-plz itself.
-Its workflow remains manual-only until the standalone release baseline is
-established, preventing the bootstrap push from re-releasing 0.2.16.
+Its workflow runs on pushes to `main` that touch Blend's sources, docs, or
+release configuration, and can also be dispatched manually.
+
+The project website lives in `website/` so code, docs, and site can change in
+one atomic commit; such a commit is an ordinary `feat`/`fix` and bumps Blend
+as usual. Changes that touch **only** the website use the `(website)` scope,
+e.g. `feat(website): ...` or `chore(website): ...` (Renovate uses the latter).
+Two layers keep these out of Blend releases: `Cargo.toml` excludes `website/`
+from the package that release-plz inspects, and `git-cliff.toml` skips
+`(website)`-scoped commits.
 
 A `blend-v*` tag starts a release that:
 

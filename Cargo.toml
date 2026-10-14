@@ -4,6 +4,9 @@ version = "0.3.4"
 edition = "2024"
 authors = ["frantic1048"]
 repository = "https://github.com/frantic1048/blend"
+# release-plz attributes commits to blend by the packaged file list, so
+# keep the project website out of it.
+exclude = ["/website/", "/.gitattributes", "/.github/workflows/website-ci.yml"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

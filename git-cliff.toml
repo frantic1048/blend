@@ -39,6 +39,10 @@ commit_parsers = [
   { message = "^ci(?:\\([^)]*\\))?[!:]", skip = true },
   { message = "^chore\\(release\\)[!:]", skip = true },
   { message = "^(?:build|chore)\\(deps(?:-dev)?\\)[!:]", skip = true },
+  # Website-only changes; scope them as e.g. `feat(website): ...`.
+  { message = "^\\w+\\(website\\)[!:]", skip = true },
+  # feat: add project website (predates the website scope convention).
+  { sha = "9878cd16ceaca58d4a0f8c1d0609d8c011904443", skip = true },
   { message = "^feat", group = "added" },
   { message = "^changed", group = "changed" },
   { message = "^deprecated", group = "deprecated" },

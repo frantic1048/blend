@@ -24,6 +24,24 @@
         "minor",
         "patch"
       ]
+    },
+    {
+      "description": "Website updates must never reach the blend changelog.",
+      "matchFileNames": [
+        "website/**"
+      ],
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "website"
+    },
+    {
+      "groupName": "Website dependencies",
+      "matchFileNames": [
+        "website/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ]
     }
   ],
   "reviewers": [
