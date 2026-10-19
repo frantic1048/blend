@@ -52,8 +52,12 @@ Use `sh blend-installer.sh --dir /path/to/bin` to choose another directory.
 Published targets are:
 
 - `aarch64-apple-darwin`
+- `aarch64-unknown-linux-gnu`
 - `x86_64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
+
+Linux release archives are built on Ubuntu 22.04 and support glibc 2.35 or
+newer.
 
 ### Container
 
@@ -65,8 +69,9 @@ docker run --rm \
   ghcr.io/frantic1048/blend:latest check
 ```
 
-The image entrypoint is `blend`. Stable releases publish both a version tag and
-`latest`; prereleases publish only their version tag.
+The image entrypoint is `blend`. Version tags are multi-architecture images for
+Linux AMD64 and ARM64. Stable releases also publish `latest`; prereleases
+publish only their version tag.
 
 ### From source
 

@@ -14,6 +14,7 @@ REPO="frantic1048/blend"
 
 # SHA256 checksums embedded at CI generation time
 CHECKSUM_AARCH64_APPLE="__CHECKSUM_AARCH64_APPLE_DARWIN__"
+CHECKSUM_AARCH64_LINUX="__CHECKSUM_AARCH64_UNKNOWN_LINUX_GNU__"
 CHECKSUM_X86_64_APPLE="__CHECKSUM_X86_64_APPLE_DARWIN__"
 CHECKSUM_X86_64_LINUX="__CHECKSUM_X86_64_UNKNOWN_LINUX_GNU__"
 
@@ -68,6 +69,7 @@ main() {
 
     case "$_target" in
         aarch64-apple-darwin)   _checksum="$CHECKSUM_AARCH64_APPLE" ;;
+        aarch64-unknown-linux-gnu) _checksum="$CHECKSUM_AARCH64_LINUX" ;;
         x86_64-apple-darwin)    _checksum="$CHECKSUM_X86_64_APPLE" ;;
         x86_64-unknown-linux-gnu) _checksum="$CHECKSUM_X86_64_LINUX" ;;
         *)                      err "unsupported target: $_target" ;;

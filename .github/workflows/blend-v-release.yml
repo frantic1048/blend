@@ -24,7 +24,9 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-26-intel
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Harden the runner (audit all outbound calls)
@@ -43,8 +45,19 @@ jobs:
           cache: false
           targets: ${{ matrix.target }}
 
+      - name: Test Linux target
+        if: runner.os == 'Linux'
+        run: cargo test --locked --target ${{ matrix.target }}
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Validate Linux release binary
+        if: runner.os == 'Linux'
+        run: |
+          BINARY="target/${{ matrix.target }}/release/blend"
+          "$BINARY" --version
+          "$BINARY" --sandbox force --blend-dir tests/fixtures check toml-basic
 
       - name: Package archive
         shell: bash
@@ -106,7 +119,7 @@ jobs:
 
           sed -i "s/__APP_VERSION__/${VERSION}/" artifacts/blend-installer.sh
 
-          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+          for target in aarch64-apple-darwin aarch64-unknown-linux-gnu x86_64-apple-darwin x86_64-unknown-linux-gnu; do
             CHECKSUM=$(grep "blend-${target}.tar.xz" artifacts/sha256.sum | cut -d' ' -f1)
             PLACEHOLDER="__CHECKSUM_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')__"
             sed -i "s/${PLACEHOLDER}/${CHECKSUM}/" artifacts/blend-installer.sh
@@ -169,9 +182,21 @@ jobs:
             artifacts/blend-installer.sh
 
   docker:
-    name: Publish Docker image
+    name: Build Docker image (${{ matrix.platform }})
     needs: build
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_id: linux-amd64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - platform: linux/arm64
+            platform_id: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       attestations: write
@@ -193,6 +218,7 @@ jobs:
             github.com:443
             pkg-containers.githubusercontent.com:443
             production.cloudfront.docker.com:443
+            release-assets.githubusercontent.com:443
             registry-1.docker.io:443
             rekor.sigstore.dev:443
 
@@ -204,13 +230,13 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: archive-x86_64-unknown-linux-gnu
+          name: archive-${{ matrix.target }}
           path: artifacts
 
       - name: Extract binary
         run: |
-          tar xJf artifacts/blend-x86_64-unknown-linux-gnu.tar.xz
-          cp blend-x86_64-unknown-linux-gnu/blend ./blend
+          tar xJf artifacts/blend-${{ matrix.target }}.tar.xz
+          cp blend-${{ matrix.target }}/blend ./blend
 
       - name: Log in to ghcr.io
         uses: step-security/docker-login-action@8c7b695d8738c5699a679ff5254baf0f19f20a94 # v4.6.0
@@ -219,37 +245,133 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine image tags
-        id: tags
-        run: |
-          VERSION="${GITHUB_REF_NAME#blend-v}"
-          TAGS="ghcr.io/${{ github.repository_owner }}/blend:${VERSION}"
+      - name: Set up Docker Buildx
+        uses: step-security/setup-buildx-action@e50058a0fcd8d1a7d626c905502d010a468bf238 # v4
 
-          # Only tag latest for stable releases (no hyphen in version)
-          case "$VERSION" in
-            *-*) ;;
-            *) TAGS="${TAGS},ghcr.io/${{ github.repository_owner }}/blend:latest" ;;
-          esac
-
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push image
+      - name: Build and push image by digest
         id: build
         uses: step-security/docker-build-push-action@b736dc8a921e02a288f956d3dd9111e276a4cfec # v7.4.0
         with:
           context: .
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/blend,push-by-digest=true,name-canonical=true,push=true
 
-      - name: Attest Docker image provenance
+      - name: Validate native image
+        run: docker run --rm --platform "${{ matrix.platform }}" "ghcr.io/${{ github.repository_owner }}/blend@${{ steps.build.outputs.digest }}" --version
+
+      - name: Attest platform image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/blend
           subject-digest: ${{ steps.build.outputs.digest }}
 
+      - name: Export image digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-digest-${{ matrix.platform_id }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: Publish multi-architecture Docker image
+    needs: docker
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+      packages: write
+    steps:
+      - name: Harden the runner (Block unapproved outbound calls)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            *.pkg.github.com:443
+            api.github.com:443
+            fulcio.sigstore.dev:443
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            rekor.sigstore.dev:443
+
+      - name: Download image digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: image-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Log in to ghcr.io
+        uses: step-security/docker-login-action@8c7b695d8738c5699a679ff5254baf0f19f20a94 # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: step-security/setup-buildx-action@e50058a0fcd8d1a7d626c905502d010a468bf238 # v4
+
+      - name: Create multi-architecture manifest
+        id: manifest
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/blend
+        run: |
+          VERSION="${GITHUB_REF_NAME#blend-v}"
+          TAGS=(--tag "${IMAGE_NAME}:${VERSION}")
+          case "$VERSION" in
+            *-*) ;;
+            *) TAGS+=(--tag "${IMAGE_NAME}:latest") ;;
+          esac
+
+          mapfile -t DIGEST_FILES < <(find "$RUNNER_TEMP/digests" -type f | sort)
+          if [ "${#DIGEST_FILES[@]}" -ne 2 ]; then
+            echo "::error::Expected two platform image digests, found ${#DIGEST_FILES[@]}"
+            exit 1
+          fi
+
+          IMAGES=()
+          for DIGEST_FILE in "${DIGEST_FILES[@]}"; do
+            IMAGES+=("${IMAGE_NAME}@sha256:$(basename "$DIGEST_FILE")")
+          done
+
+          docker buildx imagetools create "${TAGS[@]}" "${IMAGES[@]}"
+
+          INSPECTION="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}")"
+          printf '%s\n' "$INSPECTION"
+          printf '%s\n' "$INSPECTION" | grep -q 'linux/amd64'
+          printf '%s\n' "$INSPECTION" | grep -q 'linux/arm64'
+
+          DIGEST="$(printf '%s\n' "$INSPECTION" | awk '$1 == "Digest:" { print $2; exit }')"
+          case "$DIGEST" in
+            sha256:*) ;;
+            *)
+              echo "::error::Could not determine manifest digest"
+              exit 1
+              ;;
+          esac
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Attest multi-architecture image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/blend
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+
   notify-tap:
     name: Notify Homebrew tap
-    needs: release
+    needs: [release, docker-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: read

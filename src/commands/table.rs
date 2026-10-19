@@ -11,6 +11,7 @@ pub fn cmd_table(ctx: &Context) -> anyhow::Result<()> {
 
     let profiles: &[(&str, &str, &str)] = &[
         ("linux", "x86_64", "linux-x86_64"),
+        ("linux", "aarch64", "linux-aarch64"),
         ("darwin", "x86_64", "macos-x86_64"),
         ("darwin", "aarch64", "macos-aarch64"),
     ];
@@ -35,7 +36,10 @@ pub fn cmd_table(ctx: &Context) -> anyhow::Result<()> {
 
     order_data.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
 
-    print!("<table><thead><tr><th>order</th><th colspan=\"3\">profiles</th></tr></thead><tbody>");
+    print!(
+        "<table><thead><tr><th>order</th><th colspan=\"{}\">profiles</th></tr></thead><tbody>",
+        profiles.len()
+    );
     for (name, matches, _) in &order_data {
         print!("\n<tr><td><a href=\"orders/{name}\">{name}</a></td>");
         for (i, (_os, _arch, label)) in profiles.iter().enumerate() {
