@@ -14,8 +14,9 @@ pub enum SandboxMode {
 /// Install blend's process sandbox.
 ///
 /// The first hardening layer deliberately stays narrow: deny later process
-/// execution and socket-based networking, while leaving filesystem access to
-/// blend's existing ownership and path checks.
+/// execution and socket-based networking; on Linux, also deny kernel async I/O
+/// through io_uring, ptrace, and cross-process writes. Filesystem access remains
+/// covered by blend's existing ownership and path checks.
 pub fn install() -> Result<()> {
     platform::install()
 }
@@ -71,6 +72,45 @@ mod platform {
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     fn install_seccomp() -> Result<()> {
+        let mut filter = build_filter();
+
+        let mut prog = libc::sock_fprog {
+            len: filter
+                .len()
+                .try_into()
+                .context("seccomp filter is too large")?,
+            filter: filter.as_mut_ptr(),
+        };
+
+        let no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        if no_new_privs == -1 {
+            return Err(std::io::Error::last_os_error())
+                .context("prctl(PR_SET_NO_NEW_PRIVS) failed");
+        }
+
+        let seccomp = unsafe {
+            libc::syscall(
+                libc::SYS_seccomp,
+                libc::SECCOMP_SET_MODE_FILTER,
+                libc::SECCOMP_FILTER_FLAG_TSYNC,
+                &mut prog as *mut libc::sock_fprog,
+            )
+        };
+        if seccomp == -1 {
+            return Err(std::io::Error::last_os_error())
+                .context("seccomp(SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC) failed");
+        }
+        if seccomp != 0 {
+            anyhow::bail!(
+                "seccomp(SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC) failed to synchronize thread {seccomp}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn build_filter() -> Vec<libc::sock_filter> {
         let mut filter = vec![
             stmt(
                 libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
@@ -89,6 +129,17 @@ mod platform {
             ),
         ];
 
+        #[cfg(target_arch = "x86_64")]
+        filter.extend([
+            jump(
+                libc::BPF_JMP | libc::BPF_JSET | libc::BPF_K,
+                X32_SYSCALL_BIT,
+                0,
+                1,
+            ),
+            stmt(libc::BPF_RET | libc::BPF_K, libc::SECCOMP_RET_KILL_PROCESS),
+        ]);
+
         for &syscall in denied_syscalls() {
             filter.push(jump(
                 libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
@@ -103,33 +154,7 @@ mod platform {
         }
 
         filter.push(stmt(libc::BPF_RET | libc::BPF_K, libc::SECCOMP_RET_ALLOW));
-
-        let mut prog = libc::sock_fprog {
-            len: filter
-                .len()
-                .try_into()
-                .context("seccomp filter is too large")?,
-            filter: filter.as_mut_ptr(),
-        };
-
-        let no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-        if no_new_privs == -1 {
-            return Err(std::io::Error::last_os_error())
-                .context("prctl(PR_SET_NO_NEW_PRIVS) failed");
-        }
-
-        let seccomp = unsafe {
-            libc::prctl(
-                libc::PR_SET_SECCOMP,
-                libc::SECCOMP_MODE_FILTER,
-                &mut prog as *mut libc::sock_fprog,
-            )
-        };
-        if seccomp == -1 {
-            return Err(std::io::Error::last_os_error()).context("prctl(PR_SET_SECCOMP) failed");
-        }
-
-        Ok(())
+        filter
     }
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -155,6 +180,11 @@ mod platform {
             libc::SYS_getsockname,
             libc::SYS_getpeername,
             libc::SYS_shutdown,
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
+            libc::SYS_ptrace,
+            libc::SYS_process_vm_writev,
         ]
     }
 
@@ -185,6 +215,11 @@ mod platform {
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
 
+    // Linux UAPI: `__X32_SYSCALL_BIT` in arch/x86/include/uapi/asm/unistd.h.
+    // x32 shares AUDIT_ARCH_X86_64, so reject its syscall namespace explicitly.
+    #[cfg(target_arch = "x86_64")]
+    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
     // Linux UAPI: `AUDIT_ARCH_*` in include/uapi/linux/audit.h.
     // Values are ELF EM_* machine ids OR'd with audit ABI flags.
     // libc does not expose these audit constants consistently, so keep the
@@ -204,6 +239,44 @@ mod platform {
     const AUDIT_ARCH: u32 = AUDIT_ARCH_64BIT | AUDIT_ARCH_LE | EM_X86_64;
     #[cfg(target_arch = "aarch64")]
     const AUDIT_ARCH: u32 = AUDIT_ARCH_64BIT | AUDIT_ARCH_LE | EM_AARCH64;
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn denies_ptrace_cross_process_writes_and_io_uring() {
+            for syscall in [
+                libc::SYS_io_uring_setup,
+                libc::SYS_io_uring_enter,
+                libc::SYS_io_uring_register,
+                libc::SYS_ptrace,
+                libc::SYS_process_vm_writev,
+            ] {
+                assert!(denied_syscalls().contains(&syscall));
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn kills_x32_syscalls() {
+            let filter = build_filter();
+            let x32_check_index = filter
+                .iter()
+                .position(|instruction| {
+                    instruction.code == (libc::BPF_JMP | libc::BPF_JSET | libc::BPF_K) as u16
+                        && instruction.k == X32_SYSCALL_BIT
+                        && (instruction.jt, instruction.jf) == (0, 1)
+                })
+                .expect("x32 syscall guard is missing");
+            let x32_kill = filter
+                .get(x32_check_index + 1)
+                .expect("x32 syscall guard must have a kill action");
+
+            assert_eq!(x32_kill.code, (libc::BPF_RET | libc::BPF_K) as u16);
+            assert_eq!(x32_kill.k, libc::SECCOMP_RET_KILL_PROCESS);
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

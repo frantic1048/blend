@@ -709,6 +709,19 @@ fn test_sandbox_force_exec_probe() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
+    if cfg!(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )) {
+        assert!(
+            output.status.success(),
+            "seccomp must install and block execve on supported Linux platforms\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr,
+        );
+        return;
+    }
+
     if output.status.success() {
         return;
     }

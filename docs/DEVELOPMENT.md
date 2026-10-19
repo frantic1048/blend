@@ -242,9 +242,10 @@ Only commands allowed to mutate state may update the remembered checkout.
 
 The first sandbox layer is intentionally process-scoped:
 
-- Linux installs a seccomp filter on supported architectures.
+- Linux installs a seccomp filter on x86_64 and aarch64.
 - macOS installs a Seatbelt profile.
-- Later process execution and socket-based communication are denied.
+- Both deny later process execution and socket-based communication.
+- Linux also denies io_uring, ptrace, and process_vm_writev.
 - Filesystem access is still governed by ordinary permissions, validated Source
   paths, evaluated Target paths, and command behavior.
 
@@ -323,12 +324,18 @@ from the package that release-plz inspects, and `git-cliff.toml` skips
 
 A `blend-v*` tag starts a release that:
 
-1. builds archives for Apple aarch64, Apple x86_64, and Linux x86_64;
+1. builds archives for Apple aarch64, Apple x86_64, Linux x86_64, and Linux
+   aarch64, with both Linux targets built on Ubuntu 22.04 for a glibc 2.35
+   compatibility floor;
 2. emits SHA256 files and build-provenance attestations;
 3. generates the installer and creates the GitHub Release;
-4. publishes the GHCR image with provenance;
+4. publishes native Linux AMD64 and ARM64 images by digest, validates and
+   attests them, and assembles the versioned multi-architecture GHCR image;
 5. dispatches stable versions to the Homebrew tap.
 
-Prereleases do not receive the container `latest` tag or a Homebrew update.
+Stable releases also tag the multi-architecture image as `latest`. Prereleases
+do not receive the container `latest` tag or a Homebrew update. Platform images
+are release intermediates addressed and attested by digest rather than by
+architecture-specific tags.
 GitHub Releases use a repository GitHub App token; changing that authentication
 requires revalidating release permissions.
