@@ -14,4 +14,4 @@ Blend works with two views of a configuration. The Source is a checkout of `orde
 
 - [Homepage](https://blend.pyonpyon.today/): an introduction with worked examples
 - [Source repository](https://github.com/frantic1048/blend): code, issues, and the canonical documentation
-- [Releases](https://github.com/frantic1048/blend/releases): prebuilt archives for Apple silicon macOS, Intel macOS, and x86-64 GNU/Linux, plus the release installer
+- [Releases](https://github.com/frantic1048/blend/releases): prebuilt archives for Apple silicon macOS, Intel macOS, and ARM64 or x86-64 GNU/Linux, plus the release installer and multi-architecture GHCR image

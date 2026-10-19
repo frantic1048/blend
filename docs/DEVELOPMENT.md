@@ -242,9 +242,10 @@ Only commands allowed to mutate state may update the remembered checkout.
 
 The first sandbox layer is intentionally process-scoped:
 
-- Linux installs a seccomp filter on supported architectures.
+- Linux installs a seccomp filter on x86_64 and aarch64.
 - macOS installs a Seatbelt profile.
-- Later process execution and socket-based communication are denied.
+- Both deny later process execution and socket-based communication.
+- Linux also denies io_uring, ptrace, and process_vm_writev.
 - Filesystem access is still governed by ordinary permissions, validated Source
   paths, evaluated Target paths, and command behavior.
 

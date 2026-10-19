@@ -459,9 +459,10 @@ infrastructure and are preserved.
 
 The process sandbox is a narrow hardening layer:
 
-- Linux uses seccomp on supported architectures.
+- Linux uses seccomp on x86_64 and aarch64.
 - macOS uses Seatbelt.
-- It denies later process execution and socket-based communication.
+- Both deny later process execution and socket-based communication.
+- Linux also denies io_uring, ptrace, and process_vm_writev.
 - It is not a complete filesystem allowlist; normal filesystem ownership and
   Blend's path validation remain important.
 
