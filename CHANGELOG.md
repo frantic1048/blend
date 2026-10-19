@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/frantic1048/blend/compare/blend-v0.3.4...blend-v0.3.5) - 2026-10-19
+
+### Added
+- refine homepage
+- publish Linux ARM64 releases
+
+### Fixed
+- harden Linux sandbox
+
 ## [0.3.4](https://github.com/frantic1048/blend/compare/blend-v0.3.3...blend-v0.3.4) - 2026-10-13
 
 ### Fixed
