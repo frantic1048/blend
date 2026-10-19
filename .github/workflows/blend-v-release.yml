@@ -282,7 +282,7 @@ jobs:
   docker-manifest:
     name: Publish multi-architecture Docker image
     needs: docker
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       attestations: write
