@@ -9,6 +9,10 @@ pr_branch_prefix = "release-plz/"
 pr_name = "chore(blend): release {{ version }}"
 publish = false
 release_always = false
+# Only meaningful Blend changes initiate a release; merge commits and routine CI
+# maintenance do not. Keep this aligned with git-cliff changelog categories.
+# Include explicit reverts and both type!(scope): and type(scope)!: forms.
+release_commits = "^(?:(?:feat|fix|changed|deprecated|security|revert)(?:\\([^)]*\\)!?|!\\([^)]*\\)|!)?:|Revert )"
 repo_url = "https://github.com/frantic1048/blend"
 semver_check = false
 
