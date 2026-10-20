@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/frantic1048/blend/compare/blend-v0.3.5...blend-v0.3.6) - 2026-10-20
+
+### Other
+- Merge pull request #24 from frantic1048/renovate/ci-dependencies
+
 ## [0.3.5](https://github.com/frantic1048/blend/compare/blend-v0.3.4...blend-v0.3.5) - 2026-10-19
 
 ### Added
