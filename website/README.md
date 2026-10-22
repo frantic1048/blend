@@ -4,6 +4,10 @@ The source for Blend's project website lives here. It is a static Astro site
 with no client-side JavaScript or external styling framework.
 
 - `/guide/` renders `../docs/GUIDE.md` directly; edit the guide there.
+- `/changelog/` renders `../CHANGELOG.md` directly, with a release index;
+  the Unreleased section is omitted from the rendered page.
+  `/changelog.md` serves the same source as Markdown. Edit release notes in
+  the root changelog. Changes to it also trigger Website CI.
 - Code is highlighted at build time by Shiki with a custom theme
   (`src/shiki/coffee.ts`). Nickel uses the upstream TextMate grammar vendored
   in `src/shiki/nickel.tmLanguage.json`, patched by `src/shiki/nickel.ts`.

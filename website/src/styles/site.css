@@ -298,6 +298,23 @@ a:hover {
   color: var(--roast);
 }
 
+.prose .heading-link {
+  display: inline-block;
+  margin-left: 0.4em;
+  padding-inline: 0.15em;
+  color: var(--ink-soft);
+  font-size: 0.65em;
+  font-weight: 400;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.prose .heading-link:hover,
+.prose .heading-link:focus-visible {
+  color: var(--caramel);
+  text-decoration: underline;
+}
+
 .prose p,
 .prose ul,
 .prose ol {

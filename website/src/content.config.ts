@@ -6,4 +6,9 @@ const docs = defineCollection({
   loader: glob({ pattern: "GUIDE.md", base: "../docs" }),
 });
 
-export const collections = { docs };
+// Release notes stay in the root changelog maintained by release automation.
+const releases = defineCollection({
+  loader: glob({ pattern: "CHANGELOG.md", base: ".." }),
+});
+
+export const collections = { docs, releases };

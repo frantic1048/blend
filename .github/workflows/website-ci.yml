@@ -6,12 +6,14 @@ on:
     paths:
       - "website/**"
       - "docs/GUIDE.md"
+      - "CHANGELOG.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"
   pull_request:
     paths:
       - "website/**"
       - "docs/GUIDE.md"
+      - "CHANGELOG.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"
 

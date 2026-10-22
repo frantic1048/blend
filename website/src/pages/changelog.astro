@@ -1,0 +1,58 @@
+---
+import { getEntry, render } from "astro:content";
+import Base from "../layouts/Base.astro";
+import { headingLinks } from "../content/heading-links";
+
+const changelog = await getEntry("releases", "changelog");
+if (!changelog?.rendered) {
+  throw new Error("CHANGELOG.md was not loaded");
+}
+
+// Omit the whole Unreleased section, including any pending notes, from HTML.
+// The canonical source and the Markdown endpoint retain it for contributors.
+const { headings } = await render(changelog);
+const { Content } = await render({
+  ...changelog,
+  rendered: {
+    ...changelog.rendered,
+    html: headingLinks(
+      changelog.rendered.html.replace(
+        /<h2\b[^>]*\bid="unreleased"[^>]*>[\s\S]*?(?=<h[12]\b|$)/,
+        "",
+      ),
+      headings,
+    ),
+  },
+});
+const releases = headings.filter((heading) => heading.depth === 2 && heading.slug !== "unreleased");
+---
+
+<Base
+  title="Changelog — Blend"
+  description="Release notes for Blend: new features, fixes, and changes, from the latest release back to the first."
+  path="/changelog/"
+  type="article"
+  image={{
+    path: "/og/home.png",
+    alt: "The Blend wordmark beside the headline “Declarative dotfiles, thoughtfully reconciled.”",
+  }}
+>
+  <div class="guide-layout">
+    <nav class="guide-toc" aria-labelledby="toc-title">
+      <details>
+        <summary id="toc-title" class="smallcaps">Releases</summary>
+        <ol>
+          {releases.map((release) => (
+            <li><a href={`#${release.slug}`}>{release.text}</a></li>
+          ))}
+        </ol>
+      </details>
+    </nav>
+
+    <main id="main" class="prose">
+      <p class="kicker smallcaps">Blend releases</p>
+      <Content />
+      <p><a href="/changelog.md">Read as Markdown</a> · <a href="https://github.com/frantic1048/blend/releases">Download releases</a></p>
+    </main>
+  </div>
+</Base>

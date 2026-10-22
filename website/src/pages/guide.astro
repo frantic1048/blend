@@ -1,13 +1,21 @@
 ---
 import { getEntry, render } from "astro:content";
 import Base from "../layouts/Base.astro";
+import { headingLinks } from "../content/heading-links";
 
 const guide = await getEntry("docs", "guide");
-if (!guide) {
+if (!guide?.rendered) {
   throw new Error("docs/GUIDE.md was not loaded");
 }
 
-const { Content, headings } = await render(guide);
+const { headings } = await render(guide);
+const { Content } = await render({
+  ...guide,
+  rendered: {
+    ...guide.rendered,
+    html: headingLinks(guide.rendered.html, headings),
+  },
+});
 
 // Group h3 entries under their h2 for the table of contents.
 const chapters: { slug: string; text: string; sections: { slug: string; text: string }[] }[] = [];
