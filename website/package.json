@@ -2,7 +2,7 @@
   "name": "blend-website",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.6.0",
+  "packageManager": "pnpm@12.16.1",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -13,11 +13,11 @@
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check"
   },
   "devDependencies": {
-    "@astrojs/check": "0.9.10",
+    "@astrojs/check": "0.9.12",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "astro": "7.3.3",
-    "shiki": "4.4.3",
+    "astro": "7.4.4",
+    "shiki": "4.5.0",
     "typescript": "6.0.3"
   }
 }
