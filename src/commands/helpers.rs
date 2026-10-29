@@ -22,11 +22,7 @@ pub fn select_orders(ctx: &Context, orders: &[String]) -> Vec<String> {
 pub fn expected_node_kind(result: &BuildResult) -> NodeKind {
     if result.is_symlink {
         NodeKind::Symlink
-    } else if result
-        .source_path
-        .as_ref()
-        .is_some_and(|source_path| source_path.is_dir())
-    {
+    } else if result.kind == nickel::ResourceKind::Directory || result.source_is_directory() {
         NodeKind::Directory
     } else {
         NodeKind::File
@@ -80,9 +76,18 @@ pub fn compute_managed_dir_diffs_with_mode(
 ) -> Result<Vec<FileDiffResult>> {
     let exclude = build_glob_set(exclude_patterns)?;
     let merged = collect_merged_files(source_dir, local_dir, exclude.as_ref())?;
-    let managed_files: Vec<_> = merged
-        .into_iter()
-        .map(|file| (file.source, file.rel_path))
+    compare_managed_files(&merged, target_dir, ignore_keys, mode)
+}
+
+fn compare_managed_files(
+    files: &[crate::compose::MergedFile],
+    target_dir: &std::path::Path,
+    ignore_keys: &[String],
+    mode: Option<u32>,
+) -> Result<Vec<FileDiffResult>> {
+    let managed_files: Vec<_> = files
+        .iter()
+        .map(|file| (file.source.clone(), file.rel_path.clone()))
         .collect();
     let mut diffs = diff_managed_files(&managed_files, target_dir, ignore_keys)?;
     if let Some(expected) = mode {
@@ -140,7 +145,12 @@ fn compute_diff_for_result_with_mode(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
         return Ok(match std::fs::read_link(&result.target) {
-            Ok(actual) if result.canonical_source.as_ref() == Some(&actual) => {
+            Ok(actual)
+                if result
+                    .canonical_source
+                    .as_ref()
+                    .is_some_and(|expected| expected.as_os_str() == actual.as_os_str()) =>
+            {
                 DiffResult::no_changes()
             }
             Ok(actual) => DiffResult::with_changes(format!(
@@ -153,14 +163,27 @@ fn compute_diff_for_result_with_mode(
         });
     }
 
+    if result.kind == nickel::ResourceKind::Directory {
+        return Ok(
+            match crate::compose::directory_mode_mismatch(
+                &result.target,
+                if include_mode { result.mode } else { None },
+            )? {
+                Some(actual) => DiffResult::with_changes(format!(
+                    "directory mode {:04o} -> {:04o}",
+                    actual,
+                    result.mode.unwrap()
+                )),
+                None => DiffResult::no_changes(),
+            },
+        );
+    }
     let mut diff = if result.is_plaintext {
         if let Some(source_path) = &result.source_path {
-            if source_path.is_dir() {
-                let file_diffs = compute_managed_dir_diffs_with_mode(
-                    source_path,
+            if result.source_is_directory() {
+                let file_diffs = compare_managed_files(
+                    &result.managed_source_files()?,
                     &result.target,
-                    result.local_dir.as_deref(),
-                    &result.exclude_patterns,
                     &result.ignore_keys,
                     include_mode.then_some(result.mode).flatten(),
                 )?;
@@ -226,14 +249,10 @@ fn compute_diff_for_result_with_mode(
 /// Compute per-file diffs for a directory build result, filtering out
 /// "target only" files that are managed by other entries in the same order.
 pub fn compute_dir_file_diffs(result: &BuildResult) -> Result<Vec<FileDiffResult>> {
-    if expected_node_kind(result) == NodeKind::Directory
-        && let Some(source_path) = &result.source_path
-    {
-        return compute_managed_dir_diffs_with_mode(
-            source_path,
+    if result.source_is_directory() && !result.is_symlink {
+        return compare_managed_files(
+            &result.managed_source_files()?,
             &result.target,
-            result.local_dir.as_deref(),
-            &result.exclude_patterns,
             &result.ignore_keys,
             result.mode,
         );
@@ -502,6 +521,8 @@ mod tests {
         let file_path = temp.path().join("plain.txt");
         std::fs::write(&file_path, "content").unwrap();
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: temp.path().join("target"),
             content: String::new(),
             is_plaintext: true,
@@ -538,6 +559,8 @@ mod tests {
         std::os::unix::fs::symlink(&backing, target.join("local.txt")).unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content: String::new(),
             is_plaintext: true,
@@ -576,6 +599,8 @@ mod tests {
         std::os::unix::fs::symlink(&backing, target.join("excluded.txt")).unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content: String::new(),
             is_plaintext: true,
@@ -607,6 +632,8 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content: String::new(),
             is_plaintext: true,
@@ -635,6 +662,8 @@ mod tests {
     fn test_compute_dir_file_diffs_no_source_path() {
         let temp = TempDir::new().unwrap();
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: temp.path().to_path_buf(),
             content: "rendered".to_string(),
             is_plaintext: false,
@@ -662,6 +691,8 @@ mod tests {
         std::fs::write(&target, "prefix=/target\nprefix-extra=target\n").unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content: "prefix=/source\nprefix-extra=source\n".to_string(),
             is_plaintext: false,
@@ -699,6 +730,8 @@ mod tests {
         std::fs::write(tgt_dir.join("a.conf"), "key=1\n").unwrap();
         std::fs::write(src_dir.join("b.conf"), "new\n").unwrap();
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: tgt_dir,
             content: String::new(),
             is_plaintext: true,
@@ -742,6 +775,8 @@ mod tests {
         std::fs::write(src_dir.join("settings"), "fixed=1\nrandom=abc\n").unwrap();
         std::fs::write(tgt_dir.join("settings"), "fixed=1\nrandom=xyz\n").unwrap();
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: tgt_dir,
             content: String::new(),
             is_plaintext: true,

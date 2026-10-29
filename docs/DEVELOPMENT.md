@@ -89,6 +89,7 @@ view, interactive sync, forced reconciliation, or failure
 | Order discovery, evaluation, and deployment | `src/compose.rs` |
 | Interactive reconciliation and Source rewriting | `src/sync.rs` |
 | Filesystem node-type comparison | `src/fs_node.rs` |
+| Explicit resource reconciliation, adoption, and ownership | `src/resources.rs` |
 | Immutable flag handling | `src/immutable.rs` |
 | Contract migration | `src/migration.rs` |
 | Command handlers | `src/commands/*.rs` |
@@ -188,7 +189,7 @@ Comparison has three independent dimensions:
 
 1. filesystem node type: missing, regular file, directory, or symlink;
 2. content or symlink destination when the types are compatible;
-3. an explicitly declared Unix mode for managed regular files.
+3. an explicitly declared Unix mode for managed regular files or directory resources.
 
 Unexpected symlinks are never followed for ordinary Target-to-Source adoption.
 Source-to-Target replacement operates on the exact managed node and leaves

@@ -226,7 +226,7 @@ pub fn check_file_sync(
     target: &Path,
     global_ignore: &[String],
 ) -> std::io::Result<Option<bool>> {
-    if file_entry.symlink {
+    if file_entry.effective_kind() != crate::nickel::ResourceKind::Content {
         return Ok(None); // Symlinks are checked separately in cmd_status
     }
 

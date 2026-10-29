@@ -119,6 +119,27 @@ jobs:
       - name: Refresh Blend-managed Vanilla files
         run: cp integration/tests/fixtures/orders/{order.contract.ncl,metadata.ncl} vanilla/orders/
 
+      # Vanilla remains pinned to a released v3 CLI until the v4 release is
+      # available. Migrate only this disposable checkout to exercise its Orders
+      # against the new contract; real Vanilla migration accompanies its CI pin.
+      - name: Migrate Source-backed symlinks in Vanilla fixture to contract v4
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          for path in pathlib.Path("vanilla/orders").glob("*/order.ncl"):
+              source = path.read_text()
+              updated = re.sub(
+                  r'(?m)^([ \t]*)symlink[ \t]*=[ \t]*true([ \t]*,?[ \t]*(?:#.*)?)$',
+                  r'\1kind = "symlink"\2',
+                  source,
+              )
+              if updated != source:
+                  path.write_text(updated)
+                  print(f"Migrated fixture declaration: {path}")
+          PY
+
       - name: Validate Vanilla Orders
         run: ./integration/target/debug/blend --blend-dir vanilla check
 

@@ -7,6 +7,6 @@ files = [
   {
     name = "van",
     from_file = "bin",
-    symlink = true,
+    kind = "symlink",
   },
 ],

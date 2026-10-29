@@ -496,7 +496,7 @@ fn entry_ncl(
         nickel_string(from_file)
     );
     if deploy_as_symlink {
-        entry.push_str(&format!("\n{field_pad}symlink = true,"));
+        entry.push_str(&format!("\n{field_pad}kind = \"symlink\","));
     }
     if prefix_plan.write_entry_prefix {
         entry.push_str(&format!(
