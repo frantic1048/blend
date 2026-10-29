@@ -119,9 +119,14 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                 format!("{:<file_w$}", source_name)
                             };
 
-                            let expected_kind = if file_entry.symlink {
+                            let expected_kind = if file_entry.effective_kind()
+                                == crate::nickel::ResourceKind::Symlink
+                            {
                                 NodeKind::Symlink
-                            } else if is_dir {
+                            } else if is_dir
+                                || file_entry.effective_kind()
+                                    == crate::nickel::ResourceKind::Directory
+                            {
                                 NodeKind::Directory
                             } else {
                                 NodeKind::File
@@ -202,17 +207,25 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                             .to_string(),
                                     )
                                 }
-                            } else if file_entry.symlink {
+                            } else if file_entry.effective_kind()
+                                == crate::nickel::ResourceKind::Symlink
+                            {
                                 // Symlink entry: check if symlink exists and points correctly
                                 let source_path = ctx
                                     .orders_dir
                                     .join(order_name)
                                     .join(file_entry.from_file.as_deref().unwrap_or(""));
-                                let canonical = source_path.canonicalize().ok();
+                                let canonical = file_entry
+                                    .link_to
+                                    .as_ref()
+                                    .map(std::path::PathBuf::from)
+                                    .or_else(|| source_path.canonicalize().ok());
                                 match target_kind {
                                     Some(NodeKind::Symlink) => match std::fs::read_link(&target) {
                                         Ok(existing)
-                                            if canonical.as_deref() == Some(existing.as_path()) =>
+                                            if canonical.as_ref().is_some_and(|expected| {
+                                                expected.as_os_str() == existing.as_os_str()
+                                            }) =>
                                         {
                                             (
                                                 style(format!("{:<status_w$}", "linked"))
@@ -258,6 +271,52 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                             .yellow()
                                             .to_string(),
                                         style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
+                                    ),
+                                }
+                            } else if file_entry.effective_kind()
+                                == crate::nickel::ResourceKind::Directory
+                            {
+                                match (
+                                    target_kind,
+                                    crate::compose::directory_mode_mismatch(
+                                        &target,
+                                        file_entry.parsed_mode().ok().flatten(),
+                                    ),
+                                ) {
+                                    (Some(NodeKind::Directory), Ok(None)) => (
+                                        style(format!("{:<status_w$}", "directory"))
+                                            .green()
+                                            .to_string(),
+                                        style(format!("{:<diff_w$}", "\u{2713}"))
+                                            .green()
+                                            .to_string(),
+                                    ),
+                                    (_, Err(error)) => {
+                                        row_error = Some(format!(
+                                            "could not compare directory mode: {error}"
+                                        ));
+                                        (
+                                            style(format!("{:<status_w$}", "error"))
+                                                .red()
+                                                .to_string(),
+                                            style(format!("{:<diff_w$}", "\u{00b7}"))
+                                                .dim()
+                                                .to_string(),
+                                        )
+                                    }
+                                    (None, _) => (
+                                        style(format!("{:<status_w$}", "pending"))
+                                            .yellow()
+                                            .to_string(),
+                                        style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
+                                    ),
+                                    _ => (
+                                        style(format!("{:<status_w$}", "mismatch"))
+                                            .yellow()
+                                            .to_string(),
+                                        style(format!("{:<diff_w$}", "\u{2260}"))
+                                            .yellow()
+                                            .to_string(),
                                     ),
                                 }
                             } else if let Some(actual_kind) = target_kind {

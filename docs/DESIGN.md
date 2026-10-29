@@ -184,7 +184,25 @@ managed node. Reconciliation may replace the exact Target after explicit
 selection, but it must not replace ancestor symlinks or import an unexpected
 symlink's referent as if it were the declared node.
 
-Intentional `symlink = true` entries remain explicit.
+Entry `kind` separates Target resources from Source inputs. `content` remains
+implicit for ordinary imports; `symlink` and `directory` require explicit use.
+Legacy `symlink = true` maps to Source-backed symlink behavior. A literal link
+owns only destination text, while an existence-only directory owns no children.
+Directory mode is optional authority on the node, not its descendants.
+
+Target-to-Source resource edits use conservative CST entry location, followed
+by in-memory Nickel evaluation. Ambiguous/computed arrays are manual edits.
+Forced Target-to-Source sync rejects node kind/structure changes. Interactive
+adoption of a link stores its literal destination and removes content inputs;
+adopting a regular file from a structural entry creates plaintext content.
+Directory adoption stays manual to avoid guessing whether to import contents or
+manage existence. Kind replacement refuses non-empty directories, even with a
+forced direction. Duplicate active Target ownership is rejected before sync.
+
+Structural resources do not reuse content snapshot bytes as a typed base.
+Successful structural reconciliation forgets an old exact-node content base,
+without deleting descendants' bases. A future structural history format can
+add kind-tagged state independently; `blend.files` remains compatible.
 
 ## Source editing uses two representations
 

@@ -304,16 +304,23 @@ fn test_directory_modes_do_not_traverse_wrong_target_components() {
             external.path().join("sub")
         };
         symlink(&referent, &wrong).unwrap();
+        let declaration_before = std::fs::read_to_string(order.join("order.ncl")).unwrap();
         let output = run_blend(
             home.path(),
             blend_dir.path(),
             &["sync", "--force-target-to-source", "secure"],
         );
-        assert!(
+        assert_eq!(
             output.status.success(),
+            !root_mismatch,
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert_eq!(
+            std::fs::read_to_string(order.join("order.ncl")).unwrap(),
+            declaration_before
+        );
+        assert!(wrong.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(
             external_file.metadata().unwrap().permissions().mode() & 0o7777,
             0o644
@@ -322,6 +329,7 @@ fn test_directory_modes_do_not_traverse_wrong_target_components() {
             std::fs::read_to_string(&external_file).unwrap(),
             "external\n"
         );
+        std::fs::write(order.join("order.ncl"), declaration_before).unwrap();
         std::fs::remove_file(&wrong).unwrap();
         std::fs::write(&wrong, "wrong type").unwrap();
         let output = run_blend(
@@ -2725,17 +2733,24 @@ fn test_broken_symlink_is_existing_type_mismatch_and_requires_explicit_source() 
 
     let source = orders_dir(blend_dir.path()).join("plaintext-single/config.txt");
     let source_before = std::fs::read_to_string(&source).unwrap();
+    let declaration_path = orders_dir(blend_dir.path()).join("plaintext-single/order.ncl");
+    let declaration_before = std::fs::read_to_string(&declaration_path).unwrap();
     let pull = run_blend(
         home.path(),
         blend_dir.path(),
         &["sync", "--force-target-to-source", "plaintext-single"],
     );
     let pull_stdout = String::from_utf8_lossy(&pull.stdout);
-    assert!(pull.status.success());
-    assert!(pull_stdout.contains("target structure does not match Source"));
+    assert!(!pull.status.success());
+    assert!(!pull_stdout.contains("Applied Target -> Source"));
+    assert_eq!(
+        std::fs::read_to_string(&declaration_path).unwrap(),
+        declaration_before
+    );
     assert_eq!(std::fs::read_to_string(&source).unwrap(), source_before);
     assert!(target.symlink_metadata().unwrap().file_type().is_symlink());
 
+    std::fs::write(&declaration_path, declaration_before).unwrap();
     let push = run_blend(
         home.path(),
         blend_dir.path(),
@@ -2765,8 +2780,8 @@ fn test_force_target_to_source_does_not_follow_unexpected_symlink() {
         &["sync", "--force-target-to-source", "plaintext-single"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success());
-    assert!(stdout.contains("target structure does not match Source"));
+    assert!(!output.status.success());
+    assert!(!stdout.contains("Applied Target -> Source"));
     assert_eq!(std::fs::read_to_string(&source).unwrap(), source_before);
     assert_eq!(
         std::fs::read_to_string(&backing_file).unwrap(),
@@ -2819,6 +2834,8 @@ fn test_intended_symlink_uses_explicit_reconciliation_for_existing_mismatches() 
         PathBuf::from("wrong-target")
     );
 
+    let declaration_path = orders_dir(blend_dir.path()).join("symlink-entry/order.ncl");
+    let declaration_before = std::fs::read_to_string(&declaration_path).unwrap();
     let pull = run_blend(
         home.path(),
         blend_dir.path(),
@@ -2826,12 +2843,18 @@ fn test_intended_symlink_uses_explicit_reconciliation_for_existing_mismatches() 
     );
     let pull_stdout = String::from_utf8_lossy(&pull.stdout);
     assert!(pull.status.success());
-    assert!(pull_stdout.contains("target structure does not match Source"));
+    assert!(pull_stdout.contains("Applied Target -> Source"));
+    assert!(
+        std::fs::read_to_string(&declaration_path)
+            .unwrap()
+            .contains("link_to")
+    );
     assert_eq!(
         std::fs::read_link(&target).unwrap(),
         PathBuf::from("wrong-target")
     );
 
+    std::fs::write(&declaration_path, declaration_before).unwrap();
     let pushed = run_blend(
         home.path(),
         blend_dir.path(),
@@ -2979,6 +3002,17 @@ fn test_regular_file_and_directory_type_mismatches_share_reconciliation() {
     assert!(skipped.status.success());
     assert!(file_target.is_dir());
 
+    let pushed = run_blend(
+        home.path(),
+        blend_dir.path(),
+        &["sync", "--force-source-to-target", "plaintext-single"],
+    );
+    assert!(!pushed.status.success());
+    assert_eq!(
+        std::fs::read_to_string(file_target.join("unmanaged.txt")).unwrap(),
+        "keep until explicit push"
+    );
+    std::fs::remove_file(file_target.join("unmanaged.txt")).unwrap();
     let pushed = run_blend(
         home.path(),
         blend_dir.path(),

@@ -1355,3 +1355,82 @@ mod tests {
         assert!(map.find_field(&kp("b")).is_none());
     }
 }
+
+/// Locate a literal file entry without guessing through merges, applications,
+/// conditionals, or computed arrays. These need a manual declaration edit.
+pub fn file_entry_record(source: &str, index: usize) -> Result<RecordInfo> {
+    fn literal<'a>(node: tree_sitter::Node<'a>, want_array: bool) -> Result<tree_sitter::Node<'a>> {
+        if (!want_array && node.kind() == "uni_record")
+            || (want_array
+                && node.kind() == "atom"
+                && node.child(0).is_some_and(|c| c.kind() == "["))
+        {
+            return Ok(node);
+        }
+        let mut cursor = node.walk();
+        let children: Vec<_> = node
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() != "comment")
+            .collect();
+        // A let expression's body is the last term, after its `in` token.
+        if node.kind() == "let_expr"
+            && let Some(body) = node.child_by_field_name("t2")
+        {
+            return literal(body, want_array);
+        }
+        if node.kind() == "annotated_infix_expr"
+            && let Some(body) = node.child_by_field_name("t")
+        {
+            return literal(body, want_array);
+        }
+        if children.len() == 1 {
+            return literal(children[0], want_array);
+        }
+        anyhow::bail!("resource declaration is computed or ambiguous; edit order.ncl manually");
+    }
+    fn field<'a>(
+        record: tree_sitter::Node<'a>,
+        name: &str,
+        source: &str,
+    ) -> Result<tree_sitter::Node<'a>> {
+        let mut cursor = record.walk();
+        let mut values = Vec::new();
+        for child in record.named_children(&mut cursor) {
+            let decl = if child.kind() == "last_field" {
+                find_child_by_kind(child, "field_decl").unwrap_or(child)
+            } else {
+                child
+            };
+            if decl.kind() != "field_decl" {
+                continue;
+            }
+            let parts = extract_field_path_segments(decl, source);
+            if parts.first().is_some_and(|s| s == name) {
+                if parts.len() != 1 {
+                    anyhow::bail!("dotted resource declaration; edit order.ncl manually");
+                }
+                values.push(extract_field_value(decl).context("field has no literal value")?);
+            }
+        }
+        if values.len() != 1 {
+            anyhow::bail!("ambiguous '{name}' declaration; edit order.ncl manually");
+        }
+        Ok(values[0])
+    }
+    let tree = parse_source(source)?;
+    if tree.root_node().has_error() {
+        anyhow::bail!("could not parse resource declaration");
+    }
+    let root = literal(tree.root_node(), false)?;
+    let blend = literal(field(root, "blend", source)?, false)?;
+    let array = literal(field(blend, "files", source)?, true)?;
+    let entry = literal(get_array_element(array, index, source)?, false)?;
+    let info = build_record_info(entry, &KeyPath::root(), source, &mut HashMap::new())?;
+    let mut seen = std::collections::HashSet::new();
+    for field in &info.fields {
+        if field.key_path.segments().len() != 1 || !seen.insert(field.key_path.clone()) {
+            anyhow::bail!("ambiguous entry fields; edit order.ncl manually");
+        }
+    }
+    Ok(info)
+}
