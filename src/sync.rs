@@ -4,7 +4,6 @@ use std::path::Path;
 use anyhow::{Context as AnyhowContext, Result};
 use console::style;
 
-use crate::compose::{build_glob_set, collect_merged_files};
 use crate::context::Context;
 use crate::diff::{DiffResult, KeyChange, KeyChangeType};
 use crate::formats::get_renderer;
@@ -87,6 +86,64 @@ pub trait Prompter {
 /// Production prompter that reads from stdin
 pub struct TerminalPrompter;
 
+/// Read without blocking signal cleanup while an interactive prompt is idle.
+#[cfg(unix)]
+fn read_prompt_line() -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut stdin = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        if crate::interrupt::interrupted() {
+            return None;
+        }
+        // A short timeout also handles a signal delivered just before poll.
+        let ready = unsafe { libc::poll(&mut stdin, 1, 100) };
+        if ready < 0 {
+            if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return None;
+        }
+        if ready == 0 {
+            continue;
+        }
+        let mut byte = 0u8;
+        let count = unsafe { libc::read(libc::STDIN_FILENO, (&mut byte as *mut u8).cast(), 1) };
+        if count < 0 {
+            if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return None;
+        }
+        if crate::interrupt::interrupted() {
+            return None;
+        }
+        if count == 0 {
+            return if bytes.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&bytes).into_owned())
+            };
+        }
+        if byte == b'\n' {
+            return Some(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        bytes.push(byte);
+    }
+}
+
+#[cfg(not(unix))]
+fn read_prompt_line() -> Option<String> {
+    let mut input = String::new();
+    match io::stdin().read_line(&mut input) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(input),
+    }
+}
+
 impl Prompter for TerminalPrompter {
     fn ask_sync_action(
         &self,
@@ -117,8 +174,9 @@ impl Prompter for TerminalPrompter {
         print!("{}", prompt);
         io::stdout().flush().unwrap();
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        let Some(input) = read_prompt_line() else {
+            return SyncAction::Quit;
+        };
 
         match input.trim().to_lowercase().as_str() {
             "s" | "source" => SyncAction::ApplySourceToTarget,
@@ -168,8 +226,9 @@ impl Prompter for TerminalPrompter {
         print!("{}", prompt);
         io::stdout().flush().unwrap();
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        let Some(input) = read_prompt_line() else {
+            return KeyAction::Quit;
+        };
 
         match input.trim().to_lowercase().as_str() {
             "s" | "source" => KeyAction::UseSource,
@@ -186,86 +245,81 @@ impl Prompter for TerminalPrompter {
     }
 }
 
-/// Pull a from_file entry: copy deployed file/directory back to source in orders/
-///
-/// When `local_dir` is set, files that have a local override are pulled into the
-/// local directory instead of the tracked source directory.
-pub fn pull_from_file(
-    source_path: &Path,
-    target: &Path,
-    local_dir: Option<&Path>,
-    exclude_patterns: &[String],
-    dry_run: bool,
-) -> Result<()> {
-    if dry_run {
-        log::info(&format!(
-            "[dry-run] Would apply Target -> Source: {} -> {}",
-            target.display(),
-            source_path.display()
-        ));
+/// Pull only destinations in the inventory bound during ownership validation.
+pub fn pull_build_result(result: &crate::compose::BuildResult, dry_run: bool) -> Result<()> {
+    let source = result
+        .source_path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("No source path for plaintext entry"))?;
+    if let Some(crate::compose::SourceManifest::Tree(files)) = &result.validated_source {
+        if dry_run {
+            log::info("[dry-run] Would pull validated directory manifest");
+            return Ok(());
+        }
+        for file in files {
+            let mut parent = result.target.clone();
+            if crate::fs_node::node_kind(&parent)? != Some(crate::fs_node::NodeKind::Directory) {
+                anyhow::bail!("Target changed type while pulling directory");
+            }
+            if let Some(relative) = file.rel_path.parent() {
+                for component in relative.components() {
+                    parent.push(component);
+                    if crate::fs_node::node_kind(&parent)?
+                        != Some(crate::fs_node::NodeKind::Directory)
+                    {
+                        anyhow::bail!("Target parent changed type while pulling directory");
+                    }
+                }
+            }
+            let target = result.target.join(&file.rel_path);
+            if crate::fs_node::node_kind(&target)?.is_none() {
+                continue;
+            }
+            pull_regular_target(&target, &file.source)?;
+        }
         return Ok(());
     }
-
-    if target.is_dir() && source_path.is_dir() {
-        pull_directory(target, source_path, local_dir, exclude_patterns)?;
-    } else if target.is_file() {
-        // Ensure parent directory exists
-        if let Some(parent) = source_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    if matches!(
+        result.validated_source,
+        Some(crate::compose::SourceManifest::File)
+    ) {
+        if dry_run {
+            log::info("[dry-run] Would pull validated file");
+            return Ok(());
         }
-        std::fs::copy(target, source_path).with_context(|| {
-            format!(
-                "Failed to copy {} to {}",
-                target.display(),
-                source_path.display()
-            )
-        })?;
-    } else {
-        anyhow::bail!(
-            "Cannot apply Target -> Source: target {} does not exist or is not a regular file/directory",
-            target.display()
-        );
+        return pull_regular_target(&result.target, source);
     }
-
-    Ok(())
+    anyhow::bail!("Cannot pull a Source that has no validated destination inventory")
 }
 
-/// Copy a deployed directory back to the source directory in orders/.
-///
-/// When a local overlay dir is set, files that came from the local overlay
-/// (i.e., exist in the local dir) are pulled back to the local dir, not
-/// the tracked source dir. Files matching exclude patterns are skipped.
-fn pull_directory(
-    deployed_dir: &Path,
-    source_dir: &Path,
-    local_dir: Option<&Path>,
-    exclude_patterns: &[String],
-) -> Result<()> {
-    let exclude = build_glob_set(exclude_patterns)?;
-
-    for managed_file in collect_merged_files(source_dir, local_dir, exclude.as_ref())? {
-        let deployed_file = deployed_dir.join(&managed_file.rel_path);
-        if !deployed_file.is_file() {
-            continue;
-        }
-
-        let pull_dest = if managed_file.is_local {
-            if let Some(ld) = local_dir {
-                ld.join(&managed_file.rel_path)
-            } else {
-                source_dir.join(&managed_file.rel_path)
-            }
-        } else {
-            source_dir.join(&managed_file.rel_path)
-        };
-
-        if let Some(parent) = pull_dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(&deployed_file, &pull_dest)?;
+fn pull_regular_target(target: &Path, source: &Path) -> Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-
+    let mut input = options.open(target)?;
+    let metadata = input.metadata()?;
+    if !metadata.is_file() {
+        anyhow::bail!("Target changed type while pulling file");
+    }
+    let parent = source
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    // Stage beside Source so a failed copy leaves its previous contents intact.
+    // The opened Target descriptor supplies both bytes and permissions, without
+    // following a replacement symlink or truncating a Source symlink's referent.
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    std::io::copy(&mut input, staged.as_file_mut())?;
+    staged.as_file().set_permissions(metadata.permissions())?;
+    staged.as_file().sync_all()?;
+    staged
+        .persist(source)
+        .with_context(|| format!("Failed to replace Source {}", source.display()))?;
     Ok(())
 }
 
@@ -1081,66 +1135,78 @@ mod tests {
     }
 
     #[test]
-    fn test_pull_from_file() {
+    fn pull_regular_target_replaces_source_atomically() {
         let temp = TempDir::new().unwrap();
-        let target = temp.path().join("deployed.txt");
-        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target");
+        let source = temp.path().join("source");
+        let previous = temp.path().join("previous-inode");
+        std::fs::write(&target, "new contents").unwrap();
+        std::fs::write(&source, "previous contents").unwrap();
+        std::fs::hard_link(&source, &previous).unwrap();
 
-        std::fs::write(&target, "deployed content").unwrap();
-        std::fs::write(&source, "old content").unwrap();
+        pull_regular_target(&target, &source).unwrap();
 
-        pull_from_file(&source, &target, None, &[], false).unwrap();
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "new contents");
+        assert_eq!(
+            std::fs::read_to_string(previous).unwrap(),
+            "previous contents"
+        );
+    }
 
+    #[cfg(unix)]
+    #[test]
+    fn pull_regular_target_preserves_target_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        let source = temp.path().join("new/source");
+        std::fs::write(&target, "executable").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o751)).unwrap();
+
+        pull_regular_target(&target, &source).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&source).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pull_regular_target_refuses_target_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        let source = temp.path().join("source");
+        let referent = temp.path().join("referent");
+        std::fs::write(&referent, "referent").unwrap();
+        std::fs::write(&source, "previous contents").unwrap();
+        symlink(&referent, &target).unwrap();
+
+        assert!(pull_regular_target(&target, &source).is_err());
         assert_eq!(
             std::fs::read_to_string(&source).unwrap(),
-            "deployed content"
+            "previous contents"
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_pull_from_file_dry_run() {
+    fn pull_regular_target_does_not_overwrite_source_symlink_referent() {
+        use std::os::unix::fs::symlink;
         let temp = TempDir::new().unwrap();
-        let target = temp.path().join("deployed.txt");
-        let source = temp.path().join("source.txt");
-
-        std::fs::write(&target, "deployed content").unwrap();
-        std::fs::write(&source, "old content").unwrap();
-
-        pull_from_file(&source, &target, None, &[], true).unwrap();
-
-        // Should not have changed
-        assert_eq!(std::fs::read_to_string(&source).unwrap(), "old content");
-    }
-
-    #[test]
-    fn test_pull_directory() {
-        let temp = TempDir::new().unwrap();
-        let deployed = temp.path().join("deployed");
+        let target = temp.path().join("target");
         let source = temp.path().join("source");
+        let referent = temp.path().join("referent");
+        std::fs::write(&target, "new contents").unwrap();
+        std::fs::write(&referent, "unrelated").unwrap();
+        symlink(&referent, &source).unwrap();
 
-        std::fs::create_dir_all(deployed.join("sub")).unwrap();
-        std::fs::write(deployed.join("file.txt"), "content").unwrap();
-        std::fs::write(deployed.join("sub/nested.txt"), "nested").unwrap();
-        std::fs::write(deployed.join("target-only.txt"), "target-only").unwrap();
+        pull_regular_target(&target, &source).unwrap();
 
-        std::fs::create_dir_all(source.join("sub")).unwrap();
-        std::fs::write(source.join("file.txt"), "old").unwrap();
-        std::fs::write(source.join("sub/nested.txt"), "old nested").unwrap();
-
-        pull_from_file(&source, &deployed, None, &[], false).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(source.join("file.txt")).unwrap(),
-            "content"
-        );
-        assert_eq!(
-            std::fs::read_to_string(source.join("sub/nested.txt")).unwrap(),
-            "nested"
-        );
-        assert!(
-            !source.join("target-only.txt").exists(),
-            "target-only deployed files should stay outside blend's ownership boundary"
-        );
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "new contents");
+        assert_eq!(std::fs::read_to_string(&referent).unwrap(), "unrelated");
+        assert!(!std::fs::symlink_metadata(&source).unwrap().is_symlink());
     }
 
     #[test]

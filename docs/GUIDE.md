@@ -14,7 +14,7 @@ Running `blend` shows whether the active Orders agree with their Targets.
 `blend view` explains differences without writing, and `blend sync` reconciles
 them.
 
-Each file entry uses exactly one source mode:
+Entries use `kind = "content"` by default. Content entries use exactly one Source input:
 
 | Mode | Source | Deployed as | Reverse sync |
 | --- | --- | --- | --- |
@@ -102,18 +102,21 @@ prefixes.
 | `from_config` | Entry | Structured Nickel declaration rendered to the selected format |
 | `from_file` | Entry | Relative Source file or directory copied to the Target |
 | `format` | Entry | Explicit format when extension inference is insufficient |
-| `symlink` | `from_file` | Deploy an intentional symlink instead of copying |
+| `kind` | Entry | `"content"` (default), `"symlink"`, or `"directory"` |
+| `link_to` | Symlink entry | Exact literal destination; exclusive with `from_file` |
+| `symlink` | `from_file` | Deprecated alias for `kind = "symlink"`; existing declarations remain supported |
 | `exclude` | `from_file` directory | Glob patterns omitted from the merged Source view |
 | `local` | `from_file` directory | Machine-local overlay merged over tracked Source |
 | `immutable` | Entry | Apply the platform immutable flag after deployment |
-| `mode` | Regular file entry | Enforce a Unix mode written as four octal digits, such as `"0600"` |
+| `mode` | Regular file or directory resource | Enforce a Unix mode written as four octal digits, such as `"0600"` |
 | `ignore` | Order or entry | Legacy diff filtering; new structured Orders should use resolution primitives |
 
 `from_file` and `local` paths are relative to the Order directory. Absolute paths
 and paths that normalize outside it are rejected. A file entry must obtain at
 least one effective Target prefix from itself or its Order.
 
-`mode` is supported on Unix targets and applies only to regular files. For a
+`mode` is supported on Unix targets and applies to regular files and explicit
+`kind = "directory"` resources. For a
 directory-backed `from_file` entry, it applies to every managed file below the
 Target, but not to directories or Target-only files. Blend corrects declared
 mode drift without prompting and keeps permission metadata separate from
@@ -156,14 +159,95 @@ files = [
   {
     name = "van",
     from_file = "bin",
-    symlink = true,
+    kind = "symlink",
   },
 ]
 ```
 
-`symlink` is valid only with `from_file`. Instead of copying content, Blend
-creates the Target as a symlink to the canonical Source path. Editing through
-that Target therefore edits the tracked Source directly.
+With `kind = "symlink"` and `from_file`, Blend creates a Target link to the
+canonical Source path. Editing through that Target edits tracked Source directly.
+The old `symlink = true` spelling remains supported for this contract version;
+removal would require a breaking migration. New `blend add --symlink
+preserve` imports emit `kind = "symlink"` with `from_file`, retaining their
+Source-backed behavior. Ordinary `blend add` uses the default content kind.
+
+### Declare a literal symlink or an existence-only directory
+
+```nickel
+files = [
+  { name = "current", kind = "symlink", link_to = "../releases/latest" },
+  { name = "shared", kind = "symlink", link_to = "/opt/shared" },
+  { name = "cache", kind = "directory", mode = "0700" },
+]
+```
+
+A symlink requires exactly one of `link_to` and `from_file`. `link_to` preserves
+its destination text exactly, including relative components. Relative links are
+resolved by the OS from the deployed link's parent; dangling links are valid.
+Blend compares the link node and destination without reading its referent.
+`mode`, `immutable`, `format`, `ignore`, `exclude`, and `local` are invalid on
+explicit symlink resources.
+
+A directory resource requires `name` and accepts no content inputs or options.
+It manages only the directory node and optional `mode`. Existing permissions
+are preserved when mode is omitted; creation uses the normal umask. Explicit
+modes are authoritative, independent of sync direction. Contents remain
+unmanaged unless separately declared by another entry. Duplicate active Target
+paths, including aliases through unowned parent symlinks and interior nodes of
+Source-backed trees, fail `check` and `sync` before Target writes. On macOS,
+case comparison follows the volume’s case sensitivity; Linux retains exact
+Target spellings. A managed file or symlink cannot also be an
+ancestor of another managed Target. Unowned ancestor symlinks remain path
+infrastructure. A declared directory ancestor with the wrong Target kind must
+be reconciled before its descendants; a child-only sync fails before accessing
+that subtree. Missing managed parents are reconciled before descendants when
+both are selected; a child-only sync requires the parent Order to be synced first.
+
+Forced Target-to-Source sync rejects node kind/structure changes; it cannot turn
+a content declaration into a symlink or collapse a Source tree into inline content.
+Same-kind link destination updates remain supported. Kind mismatches require
+interactive Source or Target selection, or an explicit declaration edit. Source selection replaces
+only the exact node; replacing or removing a non-empty directory fails without
+deleting its contents. Target selection of a symlink rewrites a concrete entry
+as `kind = "symlink"` with literal `link_to`, including when it previously used
+`from_file`. It never copies the referent. Target selection of a regular file
+when replacing a structural declaration produces a plaintext content entry.
+Converting to a directory requires a manual declaration/import so Blend does
+not silently claim directory contents or infer an existence-only kind.
+Computed entry collections, ambiguous declarations, and shared multi-Target
+resource entries require a manual edit;
+adoption refuses to discard meaningful `immutable`, `ignore`, `local`, or `exclude`
+settings, and successful rewrites use Nickel formatting. Failed adoption is reported as an error. `--no-rewrite` disables these edits,
+and `--dry-run` leaves Source and Targets unchanged.
+
+Directory permissions that remove owner access are applied after descendant
+reconciliation. During descendant maintenance, directory resources with explicit
+modes temporarily grant owner access and restore their mode on completion,
+error, SIGINT (Ctrl-C), or SIGTERM. Startup checks stop between Order evaluations
+and entries; an evaluation already in progress finishes first. Interrupted sync
+exits with status 130 for SIGINT or 143 for SIGTERM. SIGKILL and machine failure cannot run cleanup. This includes restrictive directory ancestors in another Order; an
+unselected ancestor retains its original permissions. Prompts retain Order/entry
+order except when a selected ancestor must be reconciled before a descendant.
+
+Ownership validation includes evaluable active Orders; a broken unselected
+Order does not block selected checks or syncs. Selected Order errors are reported
+individually.
+
+Source-backed directory comparison, deployment, reverse sync, modes, and
+snapshots use the file manifest checked during ownership validation; newly added Source paths are deferred to the next sync.
+Resource adoption stages and atomically replaces the Order, locks cooperating
+adoptions, and rechecks Source and Target before commit. External editors must
+cooperate with locking for stronger concurrent-edit guarantees.
+
+Structural resources use direct node/property comparison and do not write
+content snapshots. Successful reconciliation invalidates a previous content
+snapshot at that exact Target; descendant snapshots are preserved while the
+Target remains a directory. When it becomes a regular content file, obsolete
+descendant bases are retired so the parent can acquire a usable content base.
+Required snapshot invalidation failures make structural sync fail. The optional
+fields extend the existing contract compatibly: `blend init` or `blend sync`
+refreshes installed contracts. `blend.files` remains the entry collection.
+Interior symlink handling for content directory imports is unchanged.
 
 ### Protect a deployed file
 

@@ -36,7 +36,7 @@ impl Format {
 }
 
 /// Condition for when to apply this order
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 pub struct WhenCondition {
     /// List of allowed operating systems
     #[serde(default)]
@@ -66,9 +66,23 @@ impl WhenCondition {
     }
 }
 
+/// The Target resource, independent of its Source input.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    #[default]
+    Content,
+    Symlink,
+    Directory,
+}
+
 /// Individual file/folder entry in an order
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct FileEntry {
+    /// Omitted for the default content kind; explicit kinds never inferred on import.
+    pub kind: Option<ResourceKind>,
+    /// Literal link destination. Relative destinations are relative to the Target parent.
+    pub link_to: Option<String>,
     /// Destination filename, combined with prefix for target path
     #[serde(default)]
     pub name: String,
@@ -104,29 +118,71 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    /// Resolve default values after deserialization.
-    ///
-    /// - If `name` is empty and `from_file` is Some, set `name = from_file`
-    /// - If `name` is empty and only `from_config` is set, error
-    /// - If both `from_file` and `from_config` are set, error
-    /// - If neither is set, error
+    /// Validate kind-specific inputs and infer a missing name from from_file.
+    /// The deprecated boolean is an alias only when no conflicting kind is set.
     pub fn resolve_defaults(&mut self) -> Result<()> {
-        if self.from_file.is_some() && self.from_config.is_some() {
-            bail!("file entry has both 'from_file' and 'from_config' set; exactly one is required");
+        if self.symlink && self.kind.is_some_and(|kind| kind != ResourceKind::Symlink) {
+            bail!("'symlink = true' conflicts with explicit 'kind'");
         }
-        if self.from_file.is_none() && self.from_config.is_none() {
+        if self.symlink && self.from_file.is_none() {
             bail!(
-                "file entry has neither 'from_file' nor 'from_config' set; exactly one is required"
+                "deprecated 'symlink = true' requires 'from_file'; use kind = \"symlink\" for literal destinations"
             );
         }
-        if self.symlink && self.from_config.is_some() {
-            bail!("'symlink' can only be used with 'from_file', not 'from_config'");
+        match self.effective_kind() {
+            ResourceKind::Content => {
+                if self.from_file.is_some() == self.from_config.is_some() {
+                    bail!("content entry requires exactly one of 'from_file' and 'from_config'");
+                }
+                if self.link_to.is_some() {
+                    bail!("'link_to' requires kind = \"symlink\"");
+                }
+            }
+            ResourceKind::Symlink => {
+                if self.from_config.is_some() {
+                    bail!("'symlink' cannot be used with 'from_config'");
+                }
+                if self.from_file.is_some() == self.link_to.is_some() {
+                    bail!("symlink entry requires exactly one of 'from_file' and 'link_to'");
+                }
+                if self
+                    .link_to
+                    .as_ref()
+                    .is_some_and(|link| link.is_empty() || link.contains('\0'))
+                {
+                    bail!("'link_to' must be non-empty and contain no NUL bytes");
+                }
+                if self.mode.is_some()
+                    || (self.kind.is_some()
+                        && (self.immutable
+                            || self.local.is_some()
+                            || !self.exclude.is_empty()
+                            || self.format.is_some()
+                            || !self.ignore.is_empty()))
+                {
+                    bail!(
+                        "symlink entries cannot use mode, immutable, local, exclude, format, or ignore"
+                    );
+                }
+            }
+            ResourceKind::Directory => {
+                if self.from_file.is_some()
+                    || self.from_config.is_some()
+                    || self.link_to.is_some()
+                    || self.local.is_some()
+                    || !self.exclude.is_empty()
+                    || self.immutable
+                    || self.format.is_some()
+                    || !self.ignore.is_empty()
+                {
+                    bail!(
+                        "directory entries manage only existence and optional mode; content inputs and options are invalid"
+                    );
+                }
+            }
         }
         if self.local.is_some() && self.from_file.is_none() {
             bail!("'local' can only be used with 'from_file', not 'from_config'");
-        }
-        if self.mode.is_some() && self.symlink {
-            bail!("'mode' cannot be used with 'symlink'");
         }
         if let Some(mode) = &self.mode {
             parse_file_mode(mode)?;
@@ -135,10 +191,18 @@ impl FileEntry {
             if let Some(from_file) = &self.from_file {
                 self.name.clone_from(from_file);
             } else {
-                bail!("'name' is required when using 'from_config'");
+                bail!("'name' is required without 'from_file'");
             }
         }
         Ok(())
+    }
+
+    pub fn effective_kind(&self) -> ResourceKind {
+        self.kind.unwrap_or(if self.symlink {
+            ResourceKind::Symlink
+        } else {
+            ResourceKind::Content
+        })
     }
 
     /// Parse the optional canonical four-digit octal file mode.
@@ -298,6 +362,8 @@ mod tests {
     #[test]
     fn test_file_entry_target_paths_with_local_prefix() {
         let entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "settings.json".to_string(),
             from_file: None,
             from_config: Some(serde_json::json!({})),
@@ -323,6 +389,8 @@ mod tests {
     #[test]
     fn test_file_entry_target_paths_with_global_prefix() {
         let entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "settings.json".to_string(),
             from_file: None,
             from_config: Some(serde_json::json!({})),
@@ -346,6 +414,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_from_file() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: String::new(),
             from_file: Some("nvim".to_string()),
             from_config: None,
@@ -366,6 +436,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_from_config_requires_name() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: String::new(),
             from_file: None,
             from_config: Some(serde_json::json!({})),
@@ -385,6 +457,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_both_set_errors() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "test".to_string(),
             from_file: Some("test".to_string()),
             from_config: Some(serde_json::json!({})),
@@ -404,6 +478,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_neither_set_errors() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "test".to_string(),
             from_file: None,
             from_config: None,
@@ -423,6 +499,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_symlink_with_from_config_errors() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "test".to_string(),
             from_file: None,
             from_config: Some(serde_json::json!({})),
@@ -442,6 +520,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_symlink_with_from_file_ok() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: String::new(),
             from_file: Some("bin".to_string()),
             from_config: None,
@@ -462,6 +542,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_local_with_from_config_errors() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: "test".to_string(),
             from_file: None,
             from_config: Some(serde_json::json!({})),
@@ -481,6 +563,8 @@ mod tests {
     #[test]
     fn test_resolve_defaults_local_with_from_file_ok() {
         let mut entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: String::new(),
             from_file: Some("elvish".to_string()),
             from_config: None,

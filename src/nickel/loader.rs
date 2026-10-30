@@ -142,14 +142,18 @@ impl NickelEvaluator {
 
     /// Evaluate an order.ncl file and return the parsed order
     pub fn evaluate(&self, ncl_path: &Path) -> Result<Order> {
+        let ncl_content = std::fs::read_to_string(ncl_path)
+            .with_context(|| format!("Failed to read {}", ncl_path.display()))?;
+        self.evaluate_source(ncl_path, &ncl_content)
+    }
+
+    /// Evaluate an edit in memory using the original Order's import base.
+    pub fn evaluate_source(&self, ncl_path: &Path, ncl_content: &str) -> Result<Order> {
         let timing = std::env::var("BLEND_TIMING").is_ok();
         let t_total = std::time::Instant::now();
 
-        let ncl_content = std::fs::read_to_string(ncl_path)
-            .with_context(|| format!("Failed to read {}", ncl_path.display()))?;
-
         // Inject metadata by replacing the import statement
-        let mut program = self.inject_metadata(&ncl_content);
+        let mut program = self.inject_metadata(ncl_content);
 
         // Keep resolver functions and Blend enum sentinels lazy while loading
         // file metadata. Dynamic from_config values are evaluated later with

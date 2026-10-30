@@ -9,4 +9,4 @@ mod source_map;
 pub mod structure_map;
 
 pub use loader::{NickelEvaluator, format_source, normalize_order_source_path};
-pub use schema::{FileEntry, Format, Order};
+pub use schema::{FileEntry, Format, Order, ResourceKind};

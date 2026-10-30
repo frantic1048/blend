@@ -16,7 +16,7 @@ use crate::formats::get_renderer;
 use crate::fs_node::{NodeKind, node_kind};
 use crate::immutable;
 use crate::nickel::resolution::ResourceDisposition;
-use crate::nickel::{FileEntry, Format, NickelEvaluator, Order};
+use crate::nickel::{FileEntry, Format, NickelEvaluator, Order, ResourceKind};
 use crate::output::log;
 
 #[derive(Debug, Default)]
@@ -58,9 +58,18 @@ pub fn discover_orders(orders_dir: &Path) -> HashSet<String> {
     orders
 }
 
-/// Result of building a single file entry target
-#[derive(Debug)]
+/// Validated Source shape and destination inventory for one sync run.
+#[derive(Debug, Clone)]
+pub enum SourceManifest {
+    File,
+    Tree(Vec<MergedFile>),
+}
+
+/// A build is optionally bound to the Source destination set validated by sync.
+#[derive(Debug, Clone)]
 pub struct BuildResult {
+    pub validated_source: Option<SourceManifest>,
+    pub kind: ResourceKind,
     /// Target path (expanded)
     pub target: PathBuf,
     /// Rendered content (empty for plaintext)
@@ -95,6 +104,29 @@ pub struct BuildResult {
     pub manual_resolution_paths: HashSet<crate::nickel::key_path::KeyPath>,
     /// Resource-root ownership/existence semantics.
     pub resource_disposition: ResourceDisposition,
+}
+
+impl BuildResult {
+    pub fn source_is_directory(&self) -> bool {
+        match &self.validated_source {
+            Some(SourceManifest::Tree(_)) => true,
+            Some(SourceManifest::File) => false,
+            None => self.source_path.as_ref().is_some_and(|path| path.is_dir()),
+        }
+    }
+    pub fn managed_source_files(&self) -> Result<Vec<MergedFile>> {
+        if let Some(SourceManifest::Tree(files)) = &self.validated_source {
+            return Ok(files.clone());
+        }
+        let exclude = build_glob_set(&self.exclude_patterns)?;
+        collect_merged_files(
+            self.source_path
+                .as_deref()
+                .context("Directory entry has no Source")?,
+            self.local_dir.as_deref(),
+            exclude.as_ref(),
+        )
+    }
 }
 
 /// Build a single order, returning results for all file entries and targets
@@ -230,6 +262,28 @@ fn build_file_entry(
             entry.name
         ));
     }
+    if entry.effective_kind() == ResourceKind::Directory || entry.link_to.is_some() {
+        return Ok(BuildResult {
+            validated_source: None,
+            kind: entry.effective_kind(),
+            target,
+            content: String::new(),
+            is_plaintext: true,
+            source_path: None,
+            name: entry.name.clone(),
+            format: entry.effective_format(),
+            ignore_keys,
+            is_symlink: entry.effective_kind() == ResourceKind::Symlink,
+            canonical_source: entry.link_to.as_ref().map(PathBuf::from),
+            exclude_patterns: vec![],
+            local_dir: None,
+            immutable: false,
+            mode,
+            automatic_source_paths,
+            manual_resolution_paths,
+            resource_disposition,
+        });
+    }
     if let Some(file) = &entry.from_file {
         let source_path = order_dir.join(file);
         if !source_path.exists() {
@@ -254,7 +308,7 @@ fn build_file_entry(
             None
         };
 
-        if entry.symlink {
+        if entry.effective_kind() == ResourceKind::Symlink {
             let canonical = source_path.canonicalize().with_context(|| {
                 format!(
                     "Failed to canonicalize source path {}",
@@ -262,6 +316,8 @@ fn build_file_entry(
                 )
             })?;
             return Ok(BuildResult {
+                validated_source: None,
+                kind: ResourceKind::Symlink,
                 target,
                 content: String::new(),
                 is_plaintext: true,
@@ -282,6 +338,8 @@ fn build_file_entry(
         }
 
         return Ok(BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content: String::new(),
             is_plaintext: true,
@@ -311,6 +369,8 @@ fn build_file_entry(
         };
 
         return Ok(BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target,
             content,
             is_plaintext: false,
@@ -341,7 +401,7 @@ fn read_target_config(entry: &FileEntry, target: &Path) -> Result<Option<serde_j
     let Some(_) = &entry.from_config else {
         return Ok(None);
     };
-    if !target.is_file() {
+    if node_kind(target)? != Some(NodeKind::File) {
         return Ok(None);
     }
     let content = std::fs::read_to_string(target)
@@ -367,16 +427,33 @@ fn remove_exact_node(path: &Path, dry_run: bool) -> Result<()> {
     let Some(kind) = node_kind(path)? else {
         return Ok(());
     };
+    assert_removable_node(path)?;
     if dry_run {
         log::info(&format!("Would remove {kind} {}", path.display()));
         return Ok(());
     }
+    if kind == NodeKind::File {
+        #[cfg(unix)]
+        if let Ok(file) = open_regular_file_no_follow(path) {
+            immutable::clear_file(&file, path, true)?;
+        }
+    }
     if kind == NodeKind::Directory {
-        std::fs::remove_dir_all(path)
+        std::fs::remove_dir(path)
             .with_context(|| format!("Failed to remove directory {}", path.display()))?;
     } else {
         std::fs::remove_file(path)
             .with_context(|| format!("Failed to remove {kind} {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn assert_removable_node(path: &Path) -> Result<()> {
+    if node_kind(path)? == Some(NodeKind::Directory) && std::fs::read_dir(path)?.next().is_some() {
+        anyhow::bail!(
+            "Refusing to remove non-empty directory {}: its contents may be unmanaged",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -403,6 +480,7 @@ fn prepare_managed_parent_dirs(root: &Path, relative: &Path, dry_run: bool) -> R
 }
 
 /// Remove OS immutable flag from a file so it can be overwritten.
+#[cfg(not(unix))]
 fn remove_immutable_flag(path: &Path, warn_on_failure: bool) -> Result<()> {
     immutable::clear(path, warn_on_failure)
 }
@@ -423,33 +501,28 @@ fn set_immutable_flag_recursive(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Remove immutable flags from all files within a directory.
-fn remove_immutable_flag_recursive(dir: &Path, warn_on_failure: bool) -> Result<()> {
-    if !dir.exists() {
-        return Ok(());
-    }
-    for entry in WalkDir::new(dir).min_depth(1) {
-        let entry = entry?;
-        if entry.file_type().is_file() {
-            remove_immutable_flag(entry.path(), warn_on_failure)?;
-        }
-    }
-    Ok(())
-}
-
 /// Write build result to target
 pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
     match result.resource_disposition {
-        ResourceDisposition::Absent => {
-            if result.target.exists() && !dry_run {
-                remove_immutable_flag(&result.target, result.immutable)?;
-            }
-            return remove_exact_node(&result.target, dry_run);
-        }
+        ResourceDisposition::Absent => return remove_exact_node(&result.target, dry_run),
         ResourceDisposition::Unmanaged | ResourceDisposition::Unresolved => return Ok(()),
         ResourceDisposition::Present => {}
     }
 
+    if result.kind == ResourceKind::Directory {
+        prepare_exact_node(&result.target, NodeKind::Directory, dry_run)?;
+        if dry_run {
+            log::info(&format!(
+                "Would ensure directory {} (mode {:?})",
+                result.target.display(),
+                result.mode
+            ));
+            return Ok(());
+        }
+        ensure_dir(&result.target)?;
+        reconcile_directory_mode(&result.target, result.mode)?;
+        return Ok(());
+    }
     if result.is_symlink {
         if let Some(canonical) = &result.canonical_source {
             return create_symlink(canonical, &result.target, dry_run);
@@ -460,15 +533,24 @@ pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
         ));
     }
 
-    let is_plaintext_dir = result.is_plaintext
-        && result
-            .source_path
-            .as_ref()
-            .is_some_and(|source_path| source_path.is_dir());
+    let is_plaintext_dir = result.is_plaintext && result.source_is_directory();
 
     if result.is_plaintext {
         if let Some(source_path) = &result.source_path {
-            if source_path.is_dir() {
+            let is_directory = match &result.validated_source {
+                Some(SourceManifest::Tree(_)) => true,
+                Some(SourceManifest::File) => false,
+                None => source_path.is_dir(),
+            };
+            if let Some(SourceManifest::Tree(files)) = &result.validated_source {
+                copy_directory_manifest(
+                    &result.target,
+                    files,
+                    result.immutable,
+                    result.mode,
+                    dry_run,
+                )?;
+            } else if is_directory {
                 let exclude = build_glob_set(&result.exclude_patterns)?;
                 copy_directory(
                     source_path,
@@ -532,7 +614,7 @@ pub fn write_result(result: &BuildResult, dry_run: bool) -> Result<()> {
 
 /// Create a symlink at target pointing to source
 fn create_symlink(source: &Path, target: &Path, dry_run: bool) -> Result<()> {
-    remove_exact_node(target, dry_run)?;
+    assert_removable_node(target)?;
     if dry_run {
         log::info(&format!(
             "Would symlink {} -> {}",
@@ -541,27 +623,37 @@ fn create_symlink(source: &Path, target: &Path, dry_run: bool) -> Result<()> {
         ));
         return Ok(());
     }
-
-    // Ensure parent directory exists
-    if let Some(parent) = target.parent() {
-        ensure_dir(parent)?;
-    }
-
     #[cfg(unix)]
-    std::os::unix::fs::symlink(source, target).with_context(|| {
-        format!(
-            "Failed to create symlink {} -> {}",
-            target.display(),
-            source.display()
-        )
-    })?;
-
+    {
+        let parent = target.parent().context("Symlink Target has no parent")?;
+        ensure_dir(parent)?;
+        // Construct the link before touching the live node. A private sibling
+        // directory reserves the staging name and cleans up on every failure.
+        let staging = tempfile::Builder::new()
+            .prefix(".blend-link-")
+            .tempdir_in(parent)?;
+        let replacement = staging.path().join("link");
+        std::os::unix::fs::symlink(source, &replacement).with_context(|| {
+            format!(
+                "Failed to create replacement symlink for {}",
+                target.display()
+            )
+        })?;
+        match node_kind(target)? {
+            Some(NodeKind::Directory) => remove_exact_node(target, false)?,
+            Some(NodeKind::File) => {
+                if let Ok(file) = open_regular_file_no_follow(target) {
+                    immutable::clear_file(&file, target, true)?;
+                }
+            }
+            _ => {}
+        }
+        std::fs::rename(&replacement, target)
+            .with_context(|| format!("Failed to replace symlink {}", target.display()))?;
+        Ok(())
+    }
     #[cfg(not(unix))]
-    return Err(anyhow::anyhow!(
-        "Symlinks are only supported on Unix platforms"
-    ));
-
-    Ok(())
+    anyhow::bail!("Symlinks are only supported on Unix platforms")
 }
 
 /// Copy a single file to target
@@ -680,7 +772,7 @@ fn atomic_replace_file(
 
     match existing_kind {
         Some(NodeKind::Directory) => {
-            remove_immutable_flag_recursive(target, immutable)?;
+            assert_removable_node(target)?;
             remove_exact_node(target, false)?;
         }
         Some(NodeKind::File) => {
@@ -756,20 +848,12 @@ pub fn mode_mismatches(result: &BuildResult) -> Result<Vec<(PathBuf, u32)>> {
 
     #[cfg(unix)]
     {
-        let targets = if result.is_plaintext
-            && result
-                .source_path
-                .as_ref()
-                .is_some_and(|source_path| source_path.is_dir())
-        {
+        let targets = if result.is_plaintext && result.source_is_directory() {
             if node_kind(&result.target)? != Some(NodeKind::Directory) {
                 return Ok(Vec::new());
             }
-            let source = result.source_path.as_ref().expect("checked above");
-            let exclude = build_glob_set(&result.exclude_patterns)?;
             let mut targets = Vec::new();
-            for file in collect_merged_files(source, result.local_dir.as_deref(), exclude.as_ref())?
-            {
+            for file in result.managed_source_files()? {
                 let mut parent = result.target.clone();
                 let mut valid = true;
                 if let Some(relative_parent) = file.rel_path.parent() {
@@ -800,6 +884,36 @@ pub fn mode_mismatches(result: &BuildResult) -> Result<Vec<(PathBuf, u32)>> {
             }
         }
         Ok(mismatches)
+    }
+}
+
+/// Compare directory permissions without following the final node.
+pub fn directory_mode_mismatch(path: &Path, expected: Option<u32>) -> Result<Option<u32>> {
+    if node_kind(path)? != Some(NodeKind::Directory) {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    if let Some(expected) = expected {
+        let actual = path.symlink_metadata()?.permissions().mode() & 0o7777;
+        return Ok((actual != expected).then_some(actual));
+    }
+    let _ = expected;
+    Ok(None)
+}
+
+pub fn reconcile_directory_mode(path: &Path, mode: Option<u32>) -> Result<()> {
+    let Some(mode) = mode else {
+        return Ok(());
+    };
+    if directory_mode_mismatch(path, Some(mode))?.is_none() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    return set_node_mode_no_follow(path, mode, NodeKind::Directory);
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        anyhow::bail!("directory modes require Unix");
     }
 }
 
@@ -856,7 +970,7 @@ fn reconcile_regular_file_mode(path: &Path, expected: u32, immutable: bool) -> R
     let file = match open_regular_file_no_follow(path) {
         Ok(file) => file,
         Err(_) if !immutable => {
-            set_file_mode_no_follow(path, expected)?;
+            set_node_mode_no_follow(path, expected, NodeKind::File)?;
             return Ok(());
         }
         Err(_) => {
@@ -865,7 +979,7 @@ fn reconcile_regular_file_mode(path: &Path, expected: u32, immutable: bool) -> R
                 immutable::clear_no_follow(path)?;
                 // Restoration must not require read access, even when the
                 // requested mode remains unreadable. Also restore on failure.
-                let mode_result = set_file_mode_no_follow(path, expected);
+                let mode_result = set_node_mode_no_follow(path, expected, NodeKind::File);
                 let flag_result = immutable::set_no_follow(path);
                 mode_result?;
                 flag_result?;
@@ -875,7 +989,7 @@ fn reconcile_regular_file_mode(path: &Path, expected: u32, immutable: bool) -> R
                 // An immutable declaration does not imply an existing flag.
                 // chmod through the verified inode first: this succeeds for
                 // an owned unreadable file whose immutable flag is absent.
-                set_file_mode_no_follow(path, expected)?;
+                set_node_mode_no_follow(path, expected, NodeKind::File)?;
                 match open_regular_file_no_follow(path) {
                     Ok(file) => immutable::set_file(&file, path)?,
                     Err(error) => log::warn(&format!(
@@ -910,18 +1024,18 @@ fn reconcile_regular_file_mode(path: &Path, expected: u32, immutable: bool) -> R
 }
 
 #[cfg(target_os = "linux")]
-fn set_file_mode_no_follow(path: &Path, mode: u32) -> Result<()> {
+fn set_node_mode_no_follow(path: &Path, mode: u32, expected_kind: NodeKind) -> Result<()> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .with_context(|| format!("Failed to open {} without following links", path.display()))?;
-    if !file
-        .metadata()
-        .with_context(|| format!("Failed to inspect open file {}", path.display()))?
-        .file_type()
-        .is_file()
-    {
+    let file_type = file.metadata()?.file_type();
+    let wrong_kind = match expected_kind {
+        NodeKind::Directory => !file_type.is_dir(),
+        _ => !file_type.is_file(),
+    };
+    if wrong_kind {
         anyhow::bail!("Target changed type while reconciling {}", path.display());
     }
 
@@ -941,9 +1055,12 @@ fn set_file_mode_no_follow(path: &Path, mode: u32) -> Result<()> {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-fn set_file_mode_no_follow(path: &Path, mode: u32) -> Result<()> {
+fn set_node_mode_no_follow(path: &Path, mode: u32, expected_kind: NodeKind) -> Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
+    if node_kind(path)? != Some(expected_kind) {
+        anyhow::bail!("Target changed type: {}", path.display());
+    }
 
     let path_bytes = CString::new(path.as_os_str().as_bytes())
         .with_context(|| format!("Path contains an interior NUL byte: {}", path.display()))?;
@@ -1079,14 +1196,22 @@ fn copy_directory(
         ));
     }
 
+    let merged = collect_merged_files(source, local_dir, exclude)?;
+    copy_directory_manifest(target, &merged, immutable, mode, dry_run)
+}
+
+fn copy_directory_manifest(
+    target: &Path,
+    merged: &[MergedFile],
+    immutable: bool,
+    mode: Option<u32>,
+    dry_run: bool,
+) -> Result<()> {
     prepare_exact_node(target, NodeKind::Directory, dry_run)?;
     if !dry_run {
         ensure_dir(target)?;
     }
-
-    let merged = collect_merged_files(source, local_dir, exclude)?;
-
-    for mf in &merged {
+    for mf in merged {
         let target_path = target.join(&mf.rel_path);
 
         if dry_run {
@@ -1337,6 +1462,8 @@ mod tests {
     fn test_build_file_entry_preserves_explicit_format() {
         let temp = TempDir::new().unwrap();
         let entry = FileEntry {
+            kind: None,
+            link_to: None,
             name: ".npmrc".to_string(),
             from_file: None,
             from_config: Some(serde_json::json!({
@@ -1529,6 +1656,8 @@ mod tests {
         std::os::unix::fs::symlink(&backing, &linked_parent).unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: linked_parent.join("config.txt"),
             content: "new content\n".to_string(),
             is_plaintext: false,
@@ -1562,13 +1691,17 @@ mod tests {
     }
 
     #[test]
-    fn test_write_result_replaces_exact_directory_with_file() {
+    fn test_write_result_replaces_only_an_empty_directory_with_file() {
+        let _guard = env_lock().lock().unwrap();
+        crate::immutable::take_test_events();
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("config.txt");
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("old.txt"), "old").unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: target.clone(),
             content: "new content\n".to_string(),
             is_plaintext: false,
@@ -1587,9 +1720,61 @@ mod tests {
             resource_disposition: ResourceDisposition::Present,
         };
 
+        assert!(
+            write_result(&result, false)
+                .unwrap_err()
+                .to_string()
+                .contains("non-empty directory")
+        );
+        assert!(
+            !crate::immutable::take_test_events()
+                .iter()
+                .any(|(_, path)| path.starts_with(&target)),
+            "refused removal must not change unmanaged flags"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("old.txt")).unwrap(),
+            "old"
+        );
+        std::fs::remove_file(target.join("old.txt")).unwrap();
         write_result(&result, false).unwrap();
         assert_eq!(node_kind(&target).unwrap(), Some(NodeKind::File));
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_absence_unlinks_exact_symlink_without_clearing_referent_flags() {
+        let _guard = env_lock().lock().unwrap();
+        crate::immutable::take_test_events();
+        let temp = TempDir::new().unwrap();
+        let backing = temp.path().join("backing");
+        let target = temp.path().join("target");
+        std::fs::write(&backing, "referent").unwrap();
+        std::os::unix::fs::symlink(&backing, &target).unwrap();
+        let entry: FileEntry = serde_json::from_value(
+            serde_json::json!({"name": "target", "from_config": "unused", "format": "plaintext"}),
+        )
+        .unwrap();
+        let result = build_file_entry(
+            temp.path(),
+            &entry,
+            target.clone(),
+            vec![],
+            FileResolution {
+                resource_disposition: ResourceDisposition::Absent,
+                ..FileResolution::default()
+            },
+        )
+        .unwrap();
+        write_result(&result, false).unwrap();
+        assert!(node_kind(&target).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&backing).unwrap(), "referent");
+        assert!(
+            !crate::immutable::take_test_events()
+                .iter()
+                .any(|(_, path)| path == &backing || path == &target)
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1605,6 +1790,8 @@ mod tests {
         std::fs::write(&target, "old").unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: target.clone(),
             content: "new".to_string(),
             is_plaintext: false,
@@ -1659,6 +1846,8 @@ mod tests {
         std::fs::write(target.join("target-only.txt"), "cache").unwrap();
 
         let result = BuildResult {
+            validated_source: None,
+            kind: crate::nickel::ResourceKind::Content,
             target: target.clone(),
             content: String::new(),
             is_plaintext: true,
@@ -1701,5 +1890,39 @@ mod tests {
                 .any(|(_, path)| path == &target.join("target-only.txt")),
             "target-only files must not be touched, got: {events:?}"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn structural_conversions_clear_only_the_replaced_regular_inode() {
+        let _guard = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let backing = temp.path().join("outside");
+        std::fs::write(&backing, "referent").unwrap();
+        for kind in ["symlink", "directory"] {
+            let target = temp.path().join(kind);
+            std::fs::write(&target, "old immutable content").unwrap();
+            set_immutable_flag(&target).unwrap();
+            crate::immutable::take_test_events();
+            let mut fields = serde_json::json!({"name": kind, "kind": kind});
+            if kind == "symlink" {
+                fields["link_to"] = serde_json::json!("outside");
+            }
+            let entry: FileEntry = serde_json::from_value(fields).unwrap();
+            let built = build_file_entry(
+                temp.path(),
+                &entry,
+                target.clone(),
+                vec![],
+                FileResolution::default(),
+            )
+            .unwrap();
+            write_result(&built, false).unwrap();
+            let events = crate::immutable::take_test_events();
+            assert!(events.iter().any(|(event, path)| *event
+                == crate::immutable::TestImmutableEventKind::Clear
+                && path == &target));
+            assert!(!events.iter().any(|(_, path)| path == &backing));
+        }
+        assert_eq!(std::fs::read_to_string(backing).unwrap(), "referent");
     }
 }

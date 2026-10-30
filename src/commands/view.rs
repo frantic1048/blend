@@ -76,12 +76,31 @@ pub fn cmd_view(
                     let file_header =
                         format!("  {} -> {}{}", result.name, target_display, immutable_tag);
 
+                    if result.kind == crate::nickel::ResourceKind::Directory {
+                        let diff = compute_diff_for_result(result)?;
+                        let changed = target_kind.is_none() || diff.has_changes;
+                        has_changes |= changed;
+                        if changed || !short {
+                            println!(
+                                "{} (directory) {}",
+                                file_header,
+                                if target_kind.is_none() {
+                                    "(not deployed)"
+                                } else if changed {
+                                    &diff.output
+                                } else {
+                                    "(in sync)"
+                                }
+                            );
+                        }
+                        continue;
+                    }
                     if result.is_symlink {
                         if let Some(canonical) = &result.canonical_source {
                             let link_status =
                                 match (target_kind, std::fs::read_link(&result.target)) {
                                     (Some(NodeKind::Symlink), Ok(existing))
-                                        if existing == *canonical =>
+                                        if existing.as_os_str() == canonical.as_os_str() =>
                                     {
                                         if short {
                                             continue;
@@ -106,11 +125,16 @@ pub fn cmd_view(
                                     .to_string(),
                                     (None, _) => style("(not linked)").yellow().to_string(),
                                 };
+                            has_changes |= target_kind != Some(NodeKind::Symlink)
+                                || !std::fs::read_link(&result.target).is_ok_and(|actual| {
+                                    actual.as_os_str() == canonical.as_os_str()
+                                });
                             println!(
-                                "{} {} {}",
+                                "{} {} {} -> {}",
                                 file_header,
                                 style("(symlink)").dim(),
-                                link_status
+                                link_status,
+                                canonical.display()
                             );
                         }
                         continue;
