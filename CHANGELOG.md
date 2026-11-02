@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/frantic1048/blend/compare/blend-v0.4.0...blend-v0.4.1) - 2026-11-02
+
+### Fixed
+- Fix multi-architecture Docker image publishing by using Docker's built-in Buildx driver for manifest creation, avoiding a BuildKit image pull blocked by the release job's network policy ([#43](https://github.com/frantic1048/blend/pull/43)).
+
 ## [0.4.0](https://github.com/frantic1048/blend/compare/blend-v0.3.5...blend-v0.4.0) - 2026-11-02
 
 
