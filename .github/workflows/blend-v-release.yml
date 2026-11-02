@@ -321,6 +321,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: step-security/setup-buildx-action@e50058a0fcd8d1a7d626c905502d010a468bf238 # v4
+        with:
+          # Registry-only imagetools commands do not need a BuildKit container.
+          driver: docker
 
       - name: Create multi-architecture manifest
         id: manifest
