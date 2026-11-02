@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::output::log;
 
+#[cfg(not(unix))]
 pub fn clear(path: &Path, warn_on_failure: bool) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -94,10 +95,6 @@ mod platform {
 
     unsafe extern "C" {
         fn lchflags(path: *const libc::c_char, flags: libc::c_uint) -> libc::c_int;
-    }
-
-    pub fn clear(path: &Path) -> Result<()> {
-        update(path, |flags| flags & !libc::UF_IMMUTABLE)
     }
 
     pub fn set(path: &Path) -> Result<()> {
@@ -213,10 +210,6 @@ mod platform {
 
     const FS_IMMUTABLE_FL: libc::c_uint = 0x0000_0010;
 
-    pub fn clear(path: &Path) -> Result<()> {
-        update(path, |flags| flags & !FS_IMMUTABLE_FL)
-    }
-
     pub fn set(path: &Path) -> Result<()> {
         update(path, |flags| flags | FS_IMMUTABLE_FL)
     }
@@ -291,6 +284,7 @@ mod platform {
 
     use anyhow::Result;
 
+    #[cfg(not(unix))]
     pub fn clear(_path: &Path) -> Result<()> {
         Ok(())
     }

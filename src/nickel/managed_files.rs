@@ -39,6 +39,7 @@ use crate::output::log;
 /// When `upgrade` is true, a breaking contract migration is allowed and the
 /// user's contract file is overwritten with the current version. When false,
 /// breaking migrations cause an error directing the user to `blend init --upgrade`.
+/// Contracts newer than this CLI are always refused, including with `upgrade`.
 pub fn ensure_orders_ready(orders_dir: &Path, upgrade: bool) -> Result<()> {
     ensure_fresh(orders_dir, upgrade)
 }
@@ -59,6 +60,9 @@ fn ensure_fresh(orders_dir: &Path, upgrade: bool) -> Result<()> {
         let user_version = migration::read_contract_version(&existing);
         match migration::check(user_version) {
             MigrationCheck::UpToDate => {}
+            MigrationCheck::Newer { version, supported } => {
+                return Err(newer_contract_error(&contract_path, version, supported));
+            }
             MigrationCheck::NonBreaking { .. } => {
                 migration::print_migration_hints(user_version);
                 log::info("Non-breaking contract update — applying automatically.");
@@ -85,11 +89,13 @@ fn ensure_fresh(orders_dir: &Path, upgrade: bool) -> Result<()> {
 }
 
 /// Internal helper: verify both files exist and match the expected content.
-/// Returns an error pointing the user at `blend init` if not. The public
+/// Newer contracts require upgrading Blend; breaking gaps point directly at
+/// `blend init --upgrade`. Other
+/// stale content points at `blend init` or `blend sync`. The public
 /// entrypoint is [`assert_orders_ready`].
 fn assert_fresh(orders_dir: &Path) -> Result<()> {
-    check_fresh(&orders_dir.join("order.contract.ncl"), contract_ncl())?;
-    check_fresh(&orders_dir.join("metadata.ncl"), metadata_ncl())?;
+    check_fresh(&orders_dir.join("order.contract.ncl"), contract_ncl(), true)?;
+    check_fresh(&orders_dir.join("metadata.ncl"), metadata_ncl(), false)?;
     Ok(())
 }
 
@@ -120,7 +126,14 @@ fn write_if_changed(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_fresh(path: &Path, expected: &str) -> Result<()> {
+fn newer_contract_error(path: &Path, version: u32, supported: u32) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} is newer than this CLI (contract v{version}; CLI supports v{supported}). Upgrade Blend to a version that supports contract v{version}. The newer contract will not be overwritten.",
+        path.display()
+    )
+}
+
+fn check_fresh(path: &Path, expected: &str, is_contract: bool) -> Result<()> {
     let actual = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
@@ -132,6 +145,22 @@ fn check_fresh(path: &Path, expected: &str) -> Result<()> {
         }
     };
     if actual != expected {
+        if is_contract {
+            let user_version = migration::read_contract_version(&actual);
+            match migration::check(user_version) {
+                MigrationCheck::Newer { version, supported } => {
+                    return Err(newer_contract_error(path, version, supported));
+                }
+                MigrationCheck::Breaking { from, to } => {
+                    migration::print_migration_hints(user_version);
+                    bail!(
+                        "{} requires a breaking upgrade (v{from} → v{to}). Run `blend init --upgrade` to apply.",
+                        path.display()
+                    );
+                }
+                _ => {}
+            }
+        }
         bail!(
             "{} is out of date. Run `blend init` (or `blend sync`) to refresh.",
             path.display()
@@ -215,6 +244,20 @@ mod tests {
             "expected `out of date`, got: {msg}"
         );
         assert!(msg.contains("blend init"));
+    }
+
+    #[test]
+    fn stale_current_contract_keeps_nonbreaking_refresh_hint() {
+        let tmp = TempDir::new().unwrap();
+        ensure_fresh(tmp.path(), true).unwrap();
+        let path = tmp.path().join("order.contract.ncl");
+        let modified = format!("{}\n# local modification\n", contract_ncl());
+        std::fs::write(&path, &modified).unwrap();
+        let error = assert_orders_ready(tmp.path()).unwrap_err().to_string();
+        assert!(error.contains("out of date"), "{error}");
+        assert!(error.contains("blend sync"), "{error}");
+        assert!(!error.contains("--upgrade"), "{error}");
+        assert_eq!(read(&path), modified);
     }
 
     #[test]

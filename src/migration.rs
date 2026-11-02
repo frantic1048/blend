@@ -9,7 +9,7 @@
 use crate::output::log;
 
 /// The contract version that this build of blend expects.
-pub const CURRENT_CONTRACT_VERSION: u32 = 3;
+pub const CURRENT_CONTRACT_VERSION: u32 = 4;
 
 /// A single migration step between two adjacent contract versions.
 struct Migration {
@@ -42,13 +42,25 @@ const MIGRATIONS: &[Migration] = &[
             "Review enum-valued from_config fields before running `blend init --upgrade`",
         ],
     },
+    Migration {
+        from: 3,
+        to: 4,
+        breaking: true,
+        hints: &[
+            "The symlink boolean was removed: replace symlink = true with kind = \"symlink\" and keep from_file",
+            "Remove symlink = false; omitted kind defaults to content",
+            "Edit your order.ncl declarations, then run `blend init --upgrade`; init does not rewrite user Orders",
+        ],
+    },
 ];
 
 /// Outcome of comparing the user's contract version against the current one.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MigrationCheck {
-    /// Already up to date — no action needed.
+    /// Exact supported contract version — no migration needed.
     UpToDate,
+    /// The Source contract requires a newer CLI; never rewrite it.
+    Newer { version: u32, supported: u32 },
     /// Upgrade path exists and contains only non-breaking changes.
     /// Safe to apply automatically during `sync`.
     NonBreaking { from: u32, to: u32 },
@@ -59,7 +71,13 @@ pub enum MigrationCheck {
 
 /// Check whether a migration is needed and classify it.
 pub fn check(user_version: u32) -> MigrationCheck {
-    if user_version >= CURRENT_CONTRACT_VERSION {
+    if user_version > CURRENT_CONTRACT_VERSION {
+        return MigrationCheck::Newer {
+            version: user_version,
+            supported: CURRENT_CONTRACT_VERSION,
+        };
+    }
+    if user_version == CURRENT_CONTRACT_VERSION {
         return MigrationCheck::UpToDate;
     }
 
@@ -132,9 +150,16 @@ mod tests {
     #[test]
     fn check_up_to_date() {
         assert_eq!(check(CURRENT_CONTRACT_VERSION), MigrationCheck::UpToDate);
+    }
+
+    #[test]
+    fn check_newer_contract_requires_newer_cli() {
         assert_eq!(
             check(CURRENT_CONTRACT_VERSION + 1),
-            MigrationCheck::UpToDate
+            MigrationCheck::Newer {
+                version: CURRENT_CONTRACT_VERSION + 1,
+                supported: CURRENT_CONTRACT_VERSION,
+            }
         );
     }
 
@@ -157,6 +182,22 @@ mod tests {
                 from: 2,
                 to: CURRENT_CONTRACT_VERSION
             }
+        );
+    }
+
+    #[test]
+    fn check_v3_requires_symlink_migration() {
+        assert_eq!(check(3), MigrationCheck::Breaking { from: 3, to: 4 });
+        let hints = hints_for(3);
+        assert!(hints.iter().any(|hint| hint.contains("kind = \"symlink\"")));
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.contains("init does not rewrite"))
+        );
+        assert_eq!(
+            read_contract_version(crate::nickel::managed_files::contract_ncl()),
+            CURRENT_CONTRACT_VERSION
         );
     }
 

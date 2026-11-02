@@ -80,7 +80,16 @@ impl StateStore {
         let path = self.snapshot_path(order_name, target)?;
         match std::fs::read(&path) {
             Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::NotADirectory
+                        | std::io::ErrorKind::IsADirectory
+                ) =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(anyhow::Error::new(e)
                 .context(format!("failed to read snapshot at {}", path.display()))),
         }
@@ -92,30 +101,68 @@ impl StateStore {
     pub fn write(&self, order_name: &str, target: &Path, bytes: &[u8]) -> Result<()> {
         let path = self.snapshot_path(order_name, target)?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create snapshot dir {}", parent.display()))?;
+            self.ensure_snapshot_directory(parent)?;
         }
-        let tmp = {
-            let mut s = path.clone().into_os_string();
-            s.push(format!(".tmp.{}", std::process::id()));
-            PathBuf::from(s)
+        let parent = path.parent().expect("snapshot has a parent");
+        let mut replacement = tempfile::NamedTempFile::new_in(parent)?;
+        use std::io::Write;
+        replacement.write_all(bytes)?;
+        replacement.flush()?;
+        // A parent file base and descendant bases cannot coexist in the mirrored
+        // layout. Move obsolete descendant history aside only at commit time.
+        let retired = if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            let retired = tempfile::Builder::new()
+                .prefix(".blend-retired-")
+                .tempdir_in(parent)?;
+            std::fs::rename(&path, retired.path().join("descendants"))?;
+            Some(retired)
+        } else {
+            None
         };
-        std::fs::write(&tmp, bytes)
-            .with_context(|| format!("failed to write snapshot temp file {}", tmp.display()))?;
-        let rename_result = std::fs::rename(&tmp, &path).with_context(|| {
-            format!(
-                "failed to rename snapshot {} -> {}",
-                tmp.display(),
-                path.display()
-            )
-        });
-        if rename_result.is_err() {
-            // Best-effort cleanup; ignore secondary errors so the original
-            // failure context is preserved.
-            let _ = std::fs::remove_file(&tmp);
+        if let Err(error) = replacement.persist(&path) {
+            if let Some(retired) = &retired {
+                let _ = std::fs::rename(retired.path().join("descendants"), &path);
+            }
+            return Err(error.error.into());
         }
-        rename_result?;
         Ok(())
+    }
+
+    fn ensure_snapshot_directory(&self, path: &Path) -> Result<()> {
+        if path == self.snapshots_root {
+            std::fs::create_dir_all(path)?;
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            self.ensure_snapshot_directory(parent)?;
+        }
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() => return Ok(()),
+            Ok(_) => std::fs::remove_file(path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        std::fs::create_dir(path)?;
+        Ok(())
+    }
+
+    /// Invalidate a content base when its Target becomes a structural resource.
+    /// A directory at this path contains descendant snapshots and is preserved.
+    pub fn forget_content(&self, order_name: &str, target: &Path) -> Result<()> {
+        let path = self.snapshot_path(order_name, target)?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => Ok(()),
+            Ok(_) => std::fs::remove_file(&path).map_err(Into::into),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Read the last remembered blend checkout directory.
@@ -308,5 +355,30 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["bar.toml"]);
+    }
+    #[test]
+    fn snapshot_bases_survive_file_directory_transitions() {
+        let (store, _temp) = store_in_tempdir();
+        let parent = Path::new("/target/node");
+        let child = parent.join("child");
+        store.write("test", &child, b"child base").unwrap();
+        store.forget_content("test", parent).unwrap();
+        assert_eq!(store.read("test", parent).unwrap(), None);
+        assert_eq!(
+            store.read("test", &child).unwrap(),
+            Some(b"child base".to_vec())
+        );
+        store.write("test", parent, b"parent file base").unwrap();
+        assert_eq!(
+            store.read("test", parent).unwrap(),
+            Some(b"parent file base".to_vec())
+        );
+        assert_eq!(store.read("test", &child).unwrap(), None);
+        store.write("test", &child, b"new child base").unwrap();
+        assert_eq!(store.read("test", parent).unwrap(), None);
+        assert_eq!(
+            store.read("test", &child).unwrap(),
+            Some(b"new child base".to_vec())
+        );
     }
 }

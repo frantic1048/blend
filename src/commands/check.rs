@@ -47,6 +47,7 @@ fn validate_order_semantics(
 pub fn cmd_check(ctx: &Context, orders: &[String]) -> anyhow::Result<()> {
     managed_files::assert_orders_ready(&ctx.orders_dir)?;
 
+    crate::resources::validate_ownership(ctx)?;
     let evaluator = NickelEvaluator::new(&ctx.metadata);
     let selected = select_orders(ctx, orders);
     let checking_specific = !orders.is_empty();

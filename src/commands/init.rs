@@ -215,7 +215,10 @@ mod tests {
         std::fs::write(tmp.path().join("README.md"), "existing Source\n").unwrap();
         std::fs::write(
             tmp.path().join("orders/order.contract.ncl"),
-            "{\n  contract_version = 3,\n}\n",
+            &format!(
+                "{{\n  contract_version = {},\n}}\n",
+                crate::migration::CURRENT_CONTRACT_VERSION
+            ),
         )
         .unwrap();
         std::fs::write(tmp.path().join("orders/metadata.ncl"), "stale metadata\n").unwrap();

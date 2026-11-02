@@ -6,10 +6,12 @@ mod diff;
 mod formats;
 mod fs_node;
 mod immutable;
+mod interrupt;
 mod metadata;
 mod migration;
 mod nickel;
 mod output;
+mod resources;
 mod sandbox;
 mod state;
 mod sync;
@@ -134,7 +136,10 @@ fn main() {
 
     if let Err(e) = result {
         log::error(&format!("Error: {e}"));
-        std::process::exit(1);
+        std::process::exit(interrupt::exit_code().unwrap_or(1));
+    }
+    if let Some(code) = interrupt::exit_code() {
+        std::process::exit(code);
     }
 
     if let Err(e) = ctx.update_config_after_success() {
