@@ -67,7 +67,9 @@ pub fn cmd_add(
     let files_empty = order_data
         .as_ref()
         .is_none_or(|order| order.blend.files.is_empty());
-    let prefix_plan = choose_prefix(ctx, global_prefix, files_empty, &structure, &target, prefix)?;
+    let prefix_plan =
+        choose_prefix(ctx, global_prefix, files_empty, &structure, &target, prefix)
+            .map_err(|err| relative_operand_hint(ctx, path, &target, prefix, global_prefix, err))?;
     let from_file = path_to_order_string(&prefix_plan.source_rel)?;
     normalize_order_source_path(&from_file)?;
 
@@ -138,6 +140,12 @@ struct PrefixPlan {
     write_entry_prefix: bool,
     promote_global_prefix: bool,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Target path contains '..', which add does not collapse; pass an absolute or ~-prefixed path without '..'"
+)]
+struct UncollapsedParent;
 
 struct OrderSourceStructure {
     blend_open: usize,
@@ -231,15 +239,77 @@ fn choose_prefix(
     })
 }
 
-fn expand_target_path(ctx: &Context, path: &Path) -> anyhow::Result<PathBuf> {
+fn relative_operand_hint(
+    ctx: &Context,
+    path: &Path,
+    target: &Path,
+    prefix: Option<&str>,
+    global_prefix: &[String],
+    err: anyhow::Error,
+) -> anyhow::Error {
+    if path.is_absolute() || is_tilde_operand(path) {
+        return err;
+    }
+    let hint = if path.components().any(|c| c == Component::ParentDir)
+        && !err.is::<UncollapsedParent>()
+    {
+        // Prefix mismatch or the global-prefix loop can hide the
+        // underlying parent-component validation error.
+        "Parent components ('..') are not collapsed; pass an absolute or ~-prefixed path without '..'."
+    } else {
+        let mismatch = if let Some(prefix) = prefix {
+            prefix_has_symlink_spelling(ctx, target, prefix)
+        } else if global_prefix.is_empty() {
+            prefix_has_symlink_spelling(ctx, target, "~")
+        } else {
+            global_prefix
+                .iter()
+                .any(|prefix| prefix_has_symlink_spelling(ctx, target, prefix))
+        };
+        if !mismatch {
+            return err;
+        }
+        "The selected home or prefix has a different symlink spelling; pass an absolute or ~-prefixed path matching that prefix."
+    };
+    anyhow::anyhow!(
+        "{err:#}\nRelative Target operand resolved to {} using the physical invocation directory. {hint}",
+        target.display()
+    )
+}
+
+// This is diagnostic evidence only; keep the operand and selected prefix intact.
+fn prefix_has_symlink_spelling(ctx: &Context, target: &Path, prefix: &str) -> bool {
+    let expanded = ctx.expand_path_str(prefix);
+    expanded.is_absolute()
+        && !expanded.components().any(|c| c == Component::ParentDir)
+        && !target.starts_with(&expanded)
+        && expanded
+            .canonicalize()
+            .is_ok_and(|physical| strip_target_prefix(target, &physical, prefix).is_ok())
+        && expanded.ancestors().any(|ancestor| {
+            ancestor
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_symlink())
+        })
+}
+
+fn is_tilde_operand(path: &Path) -> bool {
     let raw = path.to_string_lossy();
-    if raw == "~" || raw.starts_with("~/") {
+    raw == "~" || raw.starts_with("~/")
+}
+
+fn expand_target_path(ctx: &Context, path: &Path) -> anyhow::Result<PathBuf> {
+    if is_tilde_operand(path) {
         return Ok(ctx.expand_path(path));
     }
     if path.is_absolute() {
         return Ok(path.to_path_buf());
     }
-    bail!("Target path must be absolute or start with ~");
+    // Preserve the supplied spelling, including parent components and the final
+    // symlink node, for the existing validation and symlink-policy checks.
+    Ok(std::env::current_dir()
+        .context("Failed to resolve invocation directory for relative Target path")?
+        .join(path))
 }
 
 fn strip_target_prefix(
@@ -264,7 +334,10 @@ fn validate_relative_path(path: &Path) -> anyhow::Result<()> {
         match component {
             Component::Normal(_) => saw_component = true,
             Component::CurDir => {}
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
+            Component::ParentDir => {
+                return Err(UncollapsedParent.into());
+            }
+            Component::Prefix(_) | Component::RootDir => {
                 bail!("Target path resolves outside the selected prefix");
             }
         }
