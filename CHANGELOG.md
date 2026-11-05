@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/frantic1048/blend/compare/blend-v0.4.2...blend-v0.4.3) - 2026-11-05
+
+
+### Added
+- *(add)* accept targets relative to the invocation directory
+
+### Fixed
+- *(deps)* update rust crate serde-saphyr to v2
+
+### Other
+- Merge pull request #30 from frantic1048/renovate/serde-saphyr-2.x
+- *(renovate)* adopt best-practices preset
+
 ## [0.4.2](https://github.com/frantic1048/blend/compare/blend-v0.4.1...blend-v0.4.2) - 2026-11-02
 
 ### Fixed
