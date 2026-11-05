@@ -44,14 +44,27 @@ When `orders/` already exists, it only refreshes those modules; the
 absent, it also creates and deploys the initial Blend configuration after
 checking that the Source root is empty apart from an optional `.git` entry.
 `blend create <order>` scaffolds an empty Order. `blend add` imports an existing
-absolute or `~`-prefixed Target as `from_file` Source:
+Target as `from_file` Source, accepting absolute, `~`-prefixed, and relative paths:
 
 ```sh
 blend init
 blend create editor
 blend add git ~/.config/git
 blend add shell --prefix ~/.config/shell ~/.config/shell/config
+cd ~/.config/editor
+blend add editor settings.toml
 ```
+
+Relative Target paths use the physical process working directory, independently
+of the selected Source root or `--blend-dir`; the shell's `PWD` spelling is not
+used. Blend joins that directory with the supplied path without canonicalizing
+the operand or collapsing `..`. Existing prefix and containment checks still
+apply. For example, from `~/.config/editor`, `blend add git ../git` is rejected
+because the path below the prefix contains `..`; use `blend add git ~/.config/git`
+instead. If your home or Target prefix is a symlink, the physical directory may
+have a different spelling and fail prefix selection; pass an absolute or
+`~`-prefixed operand matching that prefix. Symlink operands retain the existing
+requirement to choose `--symlink follow` or `--symlink preserve`.
 
 `--blend-dir` selects a Source root explicitly. Otherwise Blend searches the
 nearest ancestor containing `orders/`, then the Source root remembered in its

@@ -148,7 +148,7 @@ Creates the order when it does not exist, copies the Target path into its Source
         /// Order to add the Target path to
         order: String,
 
-        /// Target file or directory to add; must be absolute or start with ~
+        /// Target file or directory; relative paths use the invocation directory (also accepts absolute paths and ~)
         path: PathBuf,
 
         /// Target prefix to strip before copying into the order Source tree
