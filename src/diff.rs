@@ -10,11 +10,8 @@ pub use text::{text_diff, text_diff_with_base};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
-
-use crate::formats::get_renderer;
 use crate::fs_node::{NodeKind, node_kind};
-use crate::nickel::{FileEntry, Format};
+use crate::nickel::Format;
 
 /// Result of comparing two configs
 #[derive(Debug)]
@@ -63,37 +60,6 @@ impl FileDiffResult {
         self.target_kind
             .is_some_and(|target_kind| target_kind != self.expected_kind)
     }
-}
-
-/// Enumerate files in the source directory and compare each against the target.
-///
-/// Files present only in the target are intentionally ignored — blend only manages
-/// files originating from the source side, and walking large deployed directories
-/// (e.g. `~/.proto`, `~/.cache`) was the dominant cost of the status command.
-pub fn diff_directory(
-    source_dir: &Path,
-    target_dir: &Path,
-    ignore_patterns: &[String],
-) -> std::io::Result<Vec<FileDiffResult>> {
-    if !source_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut managed_files = Vec::new();
-    for entry in WalkDir::new(source_dir).min_depth(1).sort_by_file_name() {
-        let entry = entry.map_err(std::io::Error::other)?;
-        if entry.file_type().is_dir() {
-            continue;
-        }
-        let rel_path = entry
-            .path()
-            .strip_prefix(source_dir)
-            .map_err(std::io::Error::other)?
-            .to_path_buf();
-        managed_files.push((entry.path().to_path_buf(), rel_path));
-    }
-
-    diff_managed_files(&managed_files, target_dir, ignore_patterns)
 }
 
 /// Compare the exact file inventory Blend will deploy for a directory entry.
@@ -167,11 +133,19 @@ pub fn diff_managed_files(
 
         // Both exist: compare contents
         let source_path = source_path.expect("file nodes have a source path");
-        let source_content = match std::fs::read_to_string(source_path) {
+        // An unreadable Source is an error. An unreadable Target compares as
+        // changed so sync can overwrite it; assessments report it separately.
+        let source_bytes = std::fs::read(source_path).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("could not read source {}: {error}", source_path.display()),
+            )
+        })?;
+        let source_content = match String::from_utf8(source_bytes) {
             Ok(c) => c,
-            Err(_) => {
+            Err(error) => {
                 // Binary file — compare raw bytes
-                let source_bytes = std::fs::read(source_path).unwrap_or_default();
+                let source_bytes = error.into_bytes();
                 let target_bytes = std::fs::read(&target_file).unwrap_or_default();
                 results.push(FileDiffResult {
                     rel_path,
@@ -212,62 +186,6 @@ pub fn diff_managed_files(
     }
 
     Ok(results)
-}
-
-/// Check whether a deployed target file is in sync with its source.
-///
-/// Returns:
-/// - `Some(true)` if target matches source (in sync)
-/// - `Some(false)` if target differs from source
-/// - `None` if comparison is not applicable (directories, missing target, errors)
-pub fn check_file_sync(
-    order_dir: &Path,
-    file_entry: &FileEntry,
-    target: &Path,
-    global_ignore: &[String],
-) -> std::io::Result<Option<bool>> {
-    if file_entry.effective_kind() != crate::nickel::ResourceKind::Content {
-        return Ok(None); // Symlinks are checked separately in cmd_status
-    }
-
-    if !target.exists() {
-        return Ok(None);
-    }
-
-    let mut ignore_keys: Vec<String> = global_ignore.to_vec();
-    ignore_keys.extend(file_entry.ignore.iter().cloned());
-
-    if let Some(file) = &file_entry.from_file {
-        // Plaintext source file on disk
-        let source_path = order_dir.join(file);
-        if source_path.is_dir() {
-            // For directories, check all files within
-            let file_diffs = diff_directory(&source_path, target, &ignore_keys)?;
-            if file_diffs.is_empty() {
-                return Ok(None);
-            }
-            let all_in_sync = file_diffs.iter().all(|f| !f.has_changes);
-            return Ok(Some(all_in_sync));
-        }
-        let source_content = std::fs::read_to_string(&source_path)?;
-        let deployed = std::fs::read_to_string(target)?;
-        let result = diff_configs(Format::Plaintext, &source_content, &deployed, &ignore_keys);
-        return Ok(Some(!result.has_changes));
-    }
-
-    let deployed = std::fs::read_to_string(target)?;
-
-    if let Some(config) = &file_entry.from_config {
-        // Structured config rendered from nickel
-        let format = file_entry.effective_format();
-        let rendered = get_renderer(format)
-            .render(config)
-            .map_err(std::io::Error::other)?;
-        let result = diff_configs(format, &rendered, &deployed, &ignore_keys);
-        return Ok(Some(!result.has_changes));
-    }
-
-    Ok(None)
 }
 
 /// Diff two configs based on format
@@ -315,6 +233,35 @@ pub fn diff_configs_with_base(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use walkdir::WalkDir;
+
+    /// Compare every file under `source_dir` against `target_dir`, exercising
+    /// `diff_managed_files` without the overlay and exclude handling of a build.
+    fn diff_directory(
+        source_dir: &Path,
+        target_dir: &Path,
+        ignore_patterns: &[String],
+    ) -> std::io::Result<Vec<FileDiffResult>> {
+        if !source_dir.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut managed_files = Vec::new();
+        for entry in WalkDir::new(source_dir).min_depth(1).sort_by_file_name() {
+            let entry = entry.map_err(std::io::Error::other)?;
+            if entry.file_type().is_dir() {
+                continue;
+            }
+            let rel_path = entry
+                .path()
+                .strip_prefix(source_dir)
+                .map_err(std::io::Error::other)?
+                .to_path_buf();
+            managed_files.push((entry.path().to_path_buf(), rel_path));
+        }
+
+        diff_managed_files(&managed_files, target_dir, ignore_patterns)
+    }
 
     fn write_file(base: &Path, relative: &str, content: &str) {
         let path = base.join(relative);

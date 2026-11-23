@@ -1,13 +1,14 @@
 use anyhow::{Context as _, Result};
 use console::style;
 
-use crate::compose::{
-    BuildResult, build_glob_set, collect_merged_files, discover_orders, file_mode_mismatch,
-};
+use crate::compose::{BuildResult, discover_orders, file_mode_mismatch};
+#[cfg(test)]
+use crate::compose::{build_glob_set, collect_merged_files};
 use crate::context::Context;
 use crate::diff::{DiffResult, FileDiffResult, diff_configs, diff_managed_files};
 use crate::fs_node::{NodeKind, node_kind};
 use crate::nickel;
+use crate::nickel::resolution::ResourceDisposition;
 
 pub fn select_orders(ctx: &Context, orders: &[String]) -> Vec<String> {
     let mut selected: Vec<String> = if orders.is_empty() {
@@ -56,27 +57,9 @@ pub fn compute_managed_dir_diffs(
     exclude_patterns: &[String],
     ignore_keys: &[String],
 ) -> Result<Vec<FileDiffResult>> {
-    compute_managed_dir_diffs_with_mode(
-        source_dir,
-        target_dir,
-        local_dir,
-        exclude_patterns,
-        ignore_keys,
-        None,
-    )
-}
-
-pub fn compute_managed_dir_diffs_with_mode(
-    source_dir: &std::path::Path,
-    target_dir: &std::path::Path,
-    local_dir: Option<&std::path::Path>,
-    exclude_patterns: &[String],
-    ignore_keys: &[String],
-    mode: Option<u32>,
-) -> Result<Vec<FileDiffResult>> {
     let exclude = build_glob_set(exclude_patterns)?;
     let merged = collect_merged_files(source_dir, local_dir, exclude.as_ref())?;
-    compare_managed_files(&merged, target_dir, ignore_keys, mode)
+    compare_managed_files(&merged, target_dir, ignore_keys, None)
 }
 
 fn compare_managed_files(
@@ -301,6 +284,174 @@ pub fn aggregate_dir_diff(file_diffs: &[FileDiffResult]) -> DiffResult {
     }
 
     DiffResult::with_changes(output_lines.join("\n"))
+}
+
+/// The state of one built resource compared with its Target.
+///
+/// This is the single place that decides whether a resource is in sync; the
+/// status table and `view` only choose how to present it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncState {
+    /// The resolver gave up ownership of the Target.
+    Unmanaged,
+    /// The resolver needs a manual declaration edit.
+    Unresolved,
+    /// The resource is declared absent and the Target does not exist.
+    Absent,
+    /// The resource is declared absent but the Target exists.
+    WouldRemove,
+    /// The Target does not exist yet.
+    NotDeployed,
+    /// The Target exists with a different node type.
+    TypeMismatch {
+        expected: NodeKind,
+        actual: NodeKind,
+    },
+    /// The Target matches the Source.
+    InSync,
+    /// The Target differs from the Source (content, mode, or link target).
+    Changed,
+    /// The Target exists with the expected node type, but its content was not
+    /// compared (see [`assess_presence`]).
+    NotCompared,
+}
+
+impl SyncState {
+    /// Whether the Target needs attention before it matches the declaration.
+    pub fn is_drift(self) -> bool {
+        matches!(
+            self,
+            Self::Unresolved
+                | Self::WouldRemove
+                | Self::NotDeployed
+                | Self::TypeMismatch { .. }
+                | Self::Changed
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Assessment {
+    pub state: SyncState,
+    /// Details of the difference; empty unless `state` is `Changed`.
+    pub diff: DiffResult,
+    /// Per-file comparison for directory Sources whose Target root is a
+    /// directory. `None` for every other resource.
+    pub file_diffs: Option<Vec<FileDiffResult>>,
+}
+
+impl Assessment {
+    fn state(state: SyncState) -> Self {
+        Self {
+            state,
+            diff: DiffResult::no_changes(),
+            file_diffs: None,
+        }
+    }
+
+    fn from_diff(diff: DiffResult) -> Self {
+        Self {
+            state: if diff.has_changes {
+                SyncState::Changed
+            } else {
+                SyncState::InSync
+            },
+            diff,
+            file_diffs: None,
+        }
+    }
+}
+
+/// Compare a built resource with its Target.
+pub fn assess_result(result: &BuildResult) -> Result<Assessment> {
+    assess(result, true)
+}
+
+/// Like [`assess_result`], but stop before reading Target content: copied and
+/// rendered resources that exist with the right node type come back as
+/// `NotCompared`. Symlinks and directory resources are still fully assessed,
+/// since that needs no content reads.
+pub fn assess_presence(result: &BuildResult) -> Result<Assessment> {
+    assess(result, false)
+}
+
+fn assess(result: &BuildResult, compare_content: bool) -> Result<Assessment> {
+    let target_kind = node_kind(&result.target)
+        .with_context(|| format!("could not inspect target {}", result.target.display()))?;
+
+    match result.resource_disposition {
+        ResourceDisposition::Unmanaged => return Ok(Assessment::state(SyncState::Unmanaged)),
+        ResourceDisposition::Unresolved => return Ok(Assessment::state(SyncState::Unresolved)),
+        ResourceDisposition::Absent => {
+            return Ok(Assessment::state(if target_kind.is_none() {
+                SyncState::Absent
+            } else {
+                SyncState::WouldRemove
+            }));
+        }
+        ResourceDisposition::Present => {}
+    }
+
+    let Some(actual) = target_kind else {
+        return Ok(Assessment::state(SyncState::NotDeployed));
+    };
+    let expected = expected_node_kind(result);
+    if expected != actual {
+        return Ok(Assessment::state(SyncState::TypeMismatch {
+            expected,
+            actual,
+        }));
+    }
+
+    if result.is_symlink {
+        // A symlink whose link text cannot be read is an error, not drift.
+        let actual = std::fs::read_link(&result.target).with_context(|| {
+            format!("could not read target symlink {}", result.target.display())
+        })?;
+        return Ok(Assessment::from_diff(match &result.canonical_source {
+            Some(expected) if expected.as_os_str() == actual.as_os_str() => {
+                DiffResult::no_changes()
+            }
+            expected => DiffResult::with_changes(format!(
+                "symlink target mismatch: expected {}, found {}",
+                expected
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                actual.display()
+            )),
+        }));
+    }
+
+    if result.kind == nickel::ResourceKind::Directory {
+        return Ok(Assessment::from_diff(compute_diff_for_result(result)?));
+    }
+    if !compare_content {
+        return Ok(Assessment::state(SyncState::NotCompared));
+    }
+
+    if result.source_is_directory() {
+        let file_diffs = compute_dir_file_diffs(result)?;
+        // As for single files below: an unreadable managed Target file
+        // compares as changed, which sync relies on, but an assessment
+        // reports it. (Unreadable Source files already fail the comparison.)
+        for diff in &file_diffs {
+            if diff.has_changes && !diff.source_only && !diff.has_type_mismatch() {
+                let target = result.target.join(&diff.rel_path);
+                std::fs::File::open(&target)
+                    .with_context(|| format!("could not read target {}", target.display()))?;
+            }
+        }
+        let mut assessment = Assessment::from_diff(aggregate_dir_diff(&file_diffs));
+        assessment.file_diffs = Some(file_diffs);
+        return Ok(assessment);
+    }
+
+    // `compute_diff_for_result` reports an unreadable Target as changed so
+    // sync can overwrite it; an assessment reports it as an error instead.
+    std::fs::File::open(&result.target)
+        .with_context(|| format!("could not read target {}", result.target.display()))?;
+    Ok(Assessment::from_diff(compute_diff_for_result(result)?))
 }
 
 #[cfg(test)]
