@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4](https://github.com/frantic1048/blend/compare/blend-v0.4.3...blend-v0.4.4) - 2026-11-23
+
+
+### Fixed
+- *(status)* share sync assessment with view
+
 ## [0.4.3](https://github.com/frantic1048/blend/compare/blend-v0.4.2...blend-v0.4.3) - 2026-11-05
 
 
