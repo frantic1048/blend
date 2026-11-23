@@ -13,6 +13,7 @@ use crate::nickel::managed_files;
 use crate::nickel::resolution::ResourceDisposition;
 use crate::output::log;
 use crate::sync::{self, KeyAction, KeyResolution, Prompter, SyncAction, SyncMode};
+use anyhow::Context as _;
 
 /// Sync command: bidirectional sync between repo and deployed configs
 pub fn cmd_sync(
@@ -1279,6 +1280,17 @@ fn build_order_with_indices(
                 expanded_target,
                 ignore_keys.clone(),
             )?;
+            if !ctx.dry_run
+                && let Some(local_dir) = &result.local_dir
+                && !local_dir.exists()
+            {
+                std::fs::create_dir_all(local_dir).with_context(|| {
+                    format!(
+                        "Failed to create local overlay directory {}",
+                        local_dir.display()
+                    )
+                })?;
+            }
             crate::resources::bind_source_manifest(ownership, &mut result)?;
             results.push((result, file_entry_index));
         }

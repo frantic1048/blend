@@ -147,9 +147,6 @@ pub fn build_order(ctx: &Context, order_name: &str) -> Result<Vec<BuildResult>> 
     }
 
     let mut results = Vec::new();
-    let global_ignore = order.global_ignore();
-    let global_prefix = order.global_prefix();
-
     for (file_entry_index, file_entry) in order.blend.files.iter().enumerate() {
         // Check per-file condition
         if !file_entry.should_apply(&ctx.metadata.os, &ctx.metadata.arch, &ctx.metadata.hostname) {
@@ -161,34 +158,44 @@ pub fn build_order(ctx: &Context, order_name: &str) -> Result<Vec<BuildResult>> 
             }
             continue;
         }
+        for (_, result) in build_entry_targets(ctx, order_name, &order, file_entry_index) {
+            results.push(result?);
+        }
+    }
 
-        // Merge ignore keys: global + per-file
-        let mut ignore_keys: Vec<String> = global_ignore.to_vec();
-        ignore_keys.extend(file_entry.ignore.iter().cloned());
+    Ok(results)
+}
 
-        // Build for each target prefix (file-level overrides global)
-        for target_path in file_entry.target_paths(global_prefix) {
-            let expanded_target = ctx.expand_path(&target_path);
-            let (evaluated_entry, resolution) = resolve_file_entry(
+/// Build one file entry for each of its targets (file-level prefixes override
+/// the global ones). Each target gets its own result, so a target whose
+/// resolution or build fails does not hide the others.
+pub fn build_entry_targets(
+    ctx: &Context,
+    order_name: &str,
+    order: &Order,
+    file_entry_index: usize,
+) -> Vec<(PathBuf, Result<BuildResult>)> {
+    let order_dir = ctx.orders_dir.join(order_name);
+    let file_entry = &order.blend.files[file_entry_index];
+    let mut ignore_keys = order.global_ignore().to_vec();
+    ignore_keys.extend(file_entry.ignore.iter().cloned());
+    file_entry
+        .target_paths(order.global_prefix())
+        .iter()
+        .map(|target_path| {
+            let target = ctx.expand_path(target_path);
+            let result = build_file_entry_pub(
                 ctx,
                 &order_dir,
                 file_entry_index,
                 order.entry_has_resolution_semantics(file_entry_index),
                 file_entry,
-                &expanded_target,
-            )?;
-            let result = build_file_entry(
-                &order_dir,
-                &evaluated_entry,
-                expanded_target,
+                target.clone(),
                 ignore_keys.clone(),
-                resolution,
-            )?;
-            results.push(result);
-        }
-    }
-
-    Ok(results)
+            );
+            (target, result)
+        })
+        .collect()
 }
 
 /// Build a single file entry to a specific target (public wrapper)
@@ -294,19 +301,8 @@ fn build_file_entry(
             ));
         }
 
-        // Resolve local overlay directory
-        let local_dir = if let Some(local) = &entry.local {
-            let ld = order_dir.join(local);
-            // Auto-create local dir if it doesn't exist
-            if !ld.exists() {
-                std::fs::create_dir_all(&ld).with_context(|| {
-                    format!("Failed to create local overlay directory {}", ld.display())
-                })?;
-            }
-            Some(ld)
-        } else {
-            None
-        };
+        // Building stays read-only: sync creates a missing overlay directory.
+        let local_dir = entry.local.as_ref().map(|local| order_dir.join(local));
 
         if entry.effective_kind() == ResourceKind::Symlink {
             let canonical = source_path.canonicalize().with_context(|| {
@@ -1117,7 +1113,10 @@ pub fn collect_merged_files(
 ) -> Result<Vec<MergedFile>> {
     // Collect tracked files (no exclude yet -- we apply after merge)
     let mut tracked = HashMap::new();
-    if source.exists() {
+    if source
+        .try_exists()
+        .with_context(|| format!("could not inspect source {}", source.display()))?
+    {
         for entry in WalkDir::new(source).min_depth(1) {
             let entry = entry?;
             if entry.file_type().is_dir() {
@@ -1130,8 +1129,11 @@ pub fn collect_merged_files(
 
     // Collect local overlay files
     let mut local_files = HashMap::new();
+    // A missing overlay is fine; one that cannot be inspected is an error.
     if let Some(ld) = local_dir
-        && ld.exists()
+        && ld
+            .try_exists()
+            .with_context(|| format!("could not inspect local overlay {}", ld.display()))?
     {
         for entry in WalkDir::new(ld).min_depth(1) {
             let entry = entry?;

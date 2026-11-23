@@ -1,14 +1,77 @@
 use console::style;
 use rayon::prelude::*;
 
-use crate::commands::helpers::compute_managed_dir_diffs_with_mode;
-use crate::compose::{discover_orders, file_mode_mismatch, get_order, resolve_file_entry};
+use crate::commands::helpers::{Assessment, SyncState, assess_result};
+use crate::compose::{BuildResult, build_entry_targets, discover_orders, get_order};
 use crate::context::Context;
-use crate::diff::check_file_sync;
-use crate::fs_node::{NodeKind, node_kind};
+use crate::nickel::ResourceKind;
 use crate::nickel::managed_files;
-use crate::nickel::resolution::ResourceDisposition;
 use crate::output::log;
+
+/// A styled table cell, padded at render time.
+enum Cell {
+    Ok(&'static str),
+    Warn(&'static str),
+    Error(&'static str),
+    Dim(&'static str),
+}
+
+impl Cell {
+    fn render(&self, width: usize) -> String {
+        match self {
+            Self::Ok(text) => style(format!("{text:<width$}")).green().to_string(),
+            Self::Warn(text) => style(format!("{text:<width$}")).yellow().to_string(),
+            Self::Error(text) => style(format!("{text:<width$}")).red().to_string(),
+            Self::Dim(text) => style(format!("{text:<width$}")).dim().to_string(),
+        }
+    }
+}
+
+const IN_SYNC: &str = "\u{2713}";
+const DIFFERS: &str = "\u{2260}";
+const NONE: &str = "\u{00b7}";
+
+/// Present a shared assessment as the STATUS and DIFF cells of one row.
+fn status_cells(result: &BuildResult, assessment: &Assessment) -> (Cell, Cell) {
+    let in_sync_label = if result.is_symlink {
+        "linked"
+    } else if result.kind == ResourceKind::Directory {
+        "directory"
+    } else {
+        "deployed"
+    };
+    match assessment.state {
+        SyncState::Unmanaged => (Cell::Dim("unmanaged"), Cell::Dim(NONE)),
+        SyncState::Unresolved => (Cell::Warn("unresolved"), Cell::Warn(DIFFERS)),
+        SyncState::Absent => (Cell::Ok("absent"), Cell::Ok(IN_SYNC)),
+        SyncState::WouldRemove | SyncState::TypeMismatch { .. } => {
+            (Cell::Warn("mismatch"), Cell::Warn(DIFFERS))
+        }
+        SyncState::NotDeployed => (Cell::Warn("pending"), Cell::Dim(NONE)),
+        SyncState::NotCompared => (Cell::Ok(in_sync_label), Cell::Dim(NONE)),
+        SyncState::InSync => {
+            let empty_tree = assessment.file_diffs.as_ref().is_some_and(Vec::is_empty);
+            let diff = if empty_tree {
+                Cell::Dim(NONE)
+            } else {
+                Cell::Ok(IN_SYNC)
+            };
+            (Cell::Ok(in_sync_label), diff)
+        }
+        SyncState::Changed => {
+            let inner_type_mismatch = assessment
+                .file_diffs
+                .iter()
+                .flatten()
+                .any(|diff| diff.has_type_mismatch());
+            if result.is_symlink || result.kind == ResourceKind::Directory || inner_type_mismatch {
+                (Cell::Warn("mismatch"), Cell::Warn(DIFFERS))
+            } else {
+                (Cell::Ok("deployed"), Cell::Warn(DIFFERS))
+            }
+        }
+    }
+}
 
 /// Status command: show available orders and their state
 pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
@@ -62,7 +125,6 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                     }
 
                     let files = &order.blend.files;
-                    let global_prefix = order.global_prefix();
                     let mut shown_order = false;
                     for (file_entry_index, file_entry) in files.iter().enumerate() {
                         let file_applies = file_entry.should_apply(
@@ -91,11 +153,11 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                             continue;
                         }
 
-                        for (j, target_path) in
-                            file_entry.target_paths(global_prefix).iter().enumerate()
+                        for (j, (target, result)) in
+                            build_entry_targets(ctx, order_name, &order, file_entry_index)
+                                .into_iter()
+                                .enumerate()
                         {
-                            let target = ctx.expand_path(target_path);
-
                             let order_display = if !shown_order && j == 0 {
                                 shown_order = true;
                                 style(format!("{:<order_w$}", order_name))
@@ -105,12 +167,15 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                 format!("{:<order_w$}", "")
                             };
 
+                            let result = result.and_then(|result| {
+                                let assessment = assess_result(&result)?;
+                                Ok((result, assessment))
+                            });
+
                             let source_name = &file_entry.name;
-                            let is_dir = file_entry
-                                .from_file
+                            let is_dir = result
                                 .as_ref()
-                                .map(|f| ctx.orders_dir.join(order_name).join(f).is_dir())
-                                .unwrap_or(false);
+                                .is_ok_and(|(result, _)| result.source_is_directory());
                             let source_display = if source_name.len() > file_w {
                                 format!("{:<file_w$}", format!("{}...", &source_name[..file_w - 3]))
                             } else if is_dir {
@@ -119,327 +184,16 @@ pub fn cmd_status(ctx: &Context) -> anyhow::Result<()> {
                                 format!("{:<file_w$}", source_name)
                             };
 
-                            let expected_kind = if file_entry.effective_kind()
-                                == crate::nickel::ResourceKind::Symlink
-                            {
-                                NodeKind::Symlink
-                            } else if is_dir
-                                || file_entry.effective_kind()
-                                    == crate::nickel::ResourceKind::Directory
-                            {
-                                NodeKind::Directory
-                            } else {
-                                NodeKind::File
-                            };
-                            let (target_kind, mut row_error) = match node_kind(&target) {
-                                Ok(kind) => (kind, None),
-                                Err(error) => {
-                                    (None, Some(format!("could not inspect target: {error}")))
+                            let (status, diff_display, row_error) = match &result {
+                                Ok((result, assessment)) => {
+                                    let (status, diff) = status_cells(result, assessment);
+                                    (status.render(status_w), diff.render(diff_w), None)
                                 }
-                            };
-                            let order_dir = ctx.orders_dir.join(order_name);
-                            let resolved_entry = if row_error.is_none()
-                                && order.entry_has_resolution_semantics(file_entry_index)
-                            {
-                                match resolve_file_entry(
-                                    ctx,
-                                    &order_dir,
-                                    file_entry_index,
-                                    true,
-                                    file_entry,
-                                    &target,
-                                ) {
-                                    Ok(resolved) => Some(resolved),
-                                    Err(error) => {
-                                        row_error =
-                                            Some(format!("could not resolve declaration: {error}"));
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-
-                            let (status, diff_display) = if row_error.is_some() {
-                                (
-                                    style(format!("{:<status_w$}", "error")).red().to_string(),
-                                    style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                )
-                            } else if resolved_entry.as_ref().is_some_and(|(_, resolution)| {
-                                resolution.resource_disposition == ResourceDisposition::Unmanaged
-                            }) {
-                                (
-                                    style(format!("{:<status_w$}", "unmanaged"))
-                                        .dim()
-                                        .to_string(),
-                                    style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                )
-                            } else if resolved_entry.as_ref().is_some_and(|(_, resolution)| {
-                                resolution.resource_disposition == ResourceDisposition::Unresolved
-                            }) {
-                                (
-                                    style(format!("{:<status_w$}", "unresolved"))
-                                        .yellow()
-                                        .to_string(),
-                                    style(format!("{:<diff_w$}", "\u{2260}"))
-                                        .yellow()
-                                        .to_string(),
-                                )
-                            } else if resolved_entry.as_ref().is_some_and(|(_, resolution)| {
-                                resolution.resource_disposition == ResourceDisposition::Absent
-                            }) {
-                                if target_kind.is_none() {
-                                    (
-                                        style(format!("{:<status_w$}", "absent"))
-                                            .green()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2713}"))
-                                            .green()
-                                            .to_string(),
-                                    )
-                                } else {
-                                    (
-                                        style(format!("{:<status_w$}", "mismatch"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2260}"))
-                                            .yellow()
-                                            .to_string(),
-                                    )
-                                }
-                            } else if file_entry.effective_kind()
-                                == crate::nickel::ResourceKind::Symlink
-                            {
-                                // Symlink entry: check if symlink exists and points correctly
-                                let source_path = ctx
-                                    .orders_dir
-                                    .join(order_name)
-                                    .join(file_entry.from_file.as_deref().unwrap_or(""));
-                                let canonical = file_entry
-                                    .link_to
-                                    .as_ref()
-                                    .map(std::path::PathBuf::from)
-                                    .or_else(|| source_path.canonicalize().ok());
-                                match target_kind {
-                                    Some(NodeKind::Symlink) => match std::fs::read_link(&target) {
-                                        Ok(existing)
-                                            if canonical.as_ref().is_some_and(|expected| {
-                                                expected.as_os_str() == existing.as_os_str()
-                                            }) =>
-                                        {
-                                            (
-                                                style(format!("{:<status_w$}", "linked"))
-                                                    .green()
-                                                    .to_string(),
-                                                style(format!("{:<diff_w$}", "\u{2713}"))
-                                                    .green()
-                                                    .to_string(),
-                                            )
-                                        }
-                                        Ok(_) => (
-                                            style(format!("{:<status_w$}", "mismatch"))
-                                                .yellow()
-                                                .to_string(),
-                                            style(format!("{:<diff_w$}", "\u{2260}"))
-                                                .yellow()
-                                                .to_string(),
-                                        ),
-                                        Err(error) => {
-                                            row_error = Some(format!(
-                                                "could not read target symlink: {error}"
-                                            ));
-                                            (
-                                                style(format!("{:<status_w$}", "error"))
-                                                    .red()
-                                                    .to_string(),
-                                                style(format!("{:<diff_w$}", "\u{00b7}"))
-                                                    .dim()
-                                                    .to_string(),
-                                            )
-                                        }
-                                    },
-                                    Some(_) => (
-                                        style(format!("{:<status_w$}", "mismatch"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2260}"))
-                                            .yellow()
-                                            .to_string(),
-                                    ),
-                                    None => (
-                                        style(format!("{:<status_w$}", "pending"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                    ),
-                                }
-                            } else if file_entry.effective_kind()
-                                == crate::nickel::ResourceKind::Directory
-                            {
-                                match (
-                                    target_kind,
-                                    crate::compose::directory_mode_mismatch(
-                                        &target,
-                                        file_entry.parsed_mode().ok().flatten(),
-                                    ),
-                                ) {
-                                    (Some(NodeKind::Directory), Ok(None)) => (
-                                        style(format!("{:<status_w$}", "directory"))
-                                            .green()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2713}"))
-                                            .green()
-                                            .to_string(),
-                                    ),
-                                    (_, Err(error)) => {
-                                        row_error = Some(format!(
-                                            "could not compare directory mode: {error}"
-                                        ));
-                                        (
-                                            style(format!("{:<status_w$}", "error"))
-                                                .red()
-                                                .to_string(),
-                                            style(format!("{:<diff_w$}", "\u{00b7}"))
-                                                .dim()
-                                                .to_string(),
-                                        )
-                                    }
-                                    (None, _) => (
-                                        style(format!("{:<status_w$}", "pending"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                    ),
-                                    _ => (
-                                        style(format!("{:<status_w$}", "mismatch"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2260}"))
-                                            .yellow()
-                                            .to_string(),
-                                    ),
-                                }
-                            } else if let Some(actual_kind) = target_kind {
-                                let direct_mismatch = actual_kind != expected_kind;
-                                let directory_diffs = if direct_mismatch || !is_dir {
-                                    Ok(None)
-                                } else {
-                                    let source_dir = order_dir
-                                        .join(file_entry.from_file.as_deref().unwrap_or_default());
-                                    let local_dir = file_entry
-                                        .local
-                                        .as_ref()
-                                        .map(|local| order_dir.join(local));
-                                    let mut ignore_keys = order.global_ignore().to_vec();
-                                    ignore_keys.extend(file_entry.ignore.iter().cloned());
-                                    compute_managed_dir_diffs_with_mode(
-                                        &source_dir,
-                                        &target,
-                                        local_dir.as_deref(),
-                                        &file_entry.exclude,
-                                        &ignore_keys,
-                                        file_entry.parsed_mode().ok().flatten(),
-                                    )
-                                    .map(Some)
-                                };
-
-                                let directory_diffs = match directory_diffs {
-                                    Ok(value) => value,
-                                    Err(error) => {
-                                        row_error = Some(format!(
-                                            "could not build managed inventory: {error}"
-                                        ));
-                                        None
-                                    }
-                                };
-                                let inner_mismatch =
-                                    directory_diffs.as_ref().is_some_and(|diffs| {
-                                        diffs.iter().any(|diff| diff.has_type_mismatch())
-                                    });
-
-                                if row_error.is_some() {
-                                    (
-                                        style(format!("{:<status_w$}", "error")).red().to_string(),
-                                        style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                    )
-                                } else if direct_mismatch || inner_mismatch {
-                                    (
-                                        style(format!("{:<status_w$}", "mismatch"))
-                                            .yellow()
-                                            .to_string(),
-                                        style(format!("{:<diff_w$}", "\u{2260}"))
-                                            .yellow()
-                                            .to_string(),
-                                    )
-                                } else {
-                                    let sync = if let Some(file_diffs) = directory_diffs {
-                                        Ok((!file_diffs.is_empty()).then(|| {
-                                            file_diffs.iter().all(|diff| !diff.has_changes)
-                                        }))
-                                    } else {
-                                        if let Some((evaluated_entry, _)) = &resolved_entry {
-                                            check_file_sync(
-                                                &order_dir,
-                                                evaluated_entry,
-                                                &target,
-                                                order.global_ignore(),
-                                            )
-                                            .map_err(anyhow::Error::from)
-                                        } else {
-                                            check_file_sync(
-                                                &order_dir,
-                                                file_entry,
-                                                &target,
-                                                order.global_ignore(),
-                                            )
-                                            .map_err(anyhow::Error::from)
-                                        }
-                                    };
-                                    let sync = sync.and_then(|content_sync| {
-                                        let Some(expected) = file_entry.parsed_mode()? else {
-                                            return Ok(content_sync);
-                                        };
-                                        let mode_sync =
-                                            file_mode_mismatch(&target, expected)?.is_none();
-                                        Ok(content_sync.map(|content| content && mode_sync))
-                                    });
-                                    let diff_col = match sync {
-                                        Ok(Some(true)) => style(format!("{:<diff_w$}", "\u{2713}"))
-                                            .green()
-                                            .to_string(),
-                                        Ok(Some(false)) => {
-                                            style(format!("{:<diff_w$}", "\u{2260}"))
-                                                .yellow()
-                                                .to_string()
-                                        }
-                                        Ok(None) => style(format!("{:<diff_w$}", "\u{00b7}"))
-                                            .dim()
-                                            .to_string(),
-                                        Err(error) => {
-                                            row_error = Some(format!(
-                                                "could not compare target content: {error}"
-                                            ));
-                                            style(format!("{:<diff_w$}", "\u{00b7}"))
-                                                .dim()
-                                                .to_string()
-                                        }
-                                    };
-                                    let status = if row_error.is_some() {
-                                        style(format!("{:<status_w$}", "error")).red().to_string()
-                                    } else {
-                                        style(format!("{:<status_w$}", "deployed"))
-                                            .green()
-                                            .to_string()
-                                    };
-                                    (status, diff_col)
-                                }
-                            } else {
-                                (
-                                    style(format!("{:<status_w$}", "pending"))
-                                        .yellow()
-                                        .to_string(),
-                                    style(format!("{:<diff_w$}", "\u{00b7}")).dim().to_string(),
-                                )
+                                Err(error) => (
+                                    Cell::Error("error").render(status_w),
+                                    Cell::Dim("\u{00b7}").render(diff_w),
+                                    Some(format!("{error:#}")),
+                                ),
                             };
 
                             let target_str = target.to_string_lossy();

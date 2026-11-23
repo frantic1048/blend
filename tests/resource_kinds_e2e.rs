@@ -1090,3 +1090,288 @@ fn newer_contract_requires_upgrading_blend_and_is_never_downgraded() {
         assert!(!f.repo.path().join("state").exists());
     }
 }
+
+/// The DIFF cell of the status row for `name`.
+fn status_diff_cell(status: &str, name: &str) -> String {
+    let row = status
+        .lines()
+        .find(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|file| file.trim_end_matches('/') == name)
+        })
+        .unwrap_or_else(|| panic!("no status row for {name}:\n{status}"));
+    assert!(!row.contains("error"), "status row errored: {row}");
+    row.split_whitespace().nth(3).unwrap().to_string()
+}
+
+#[test]
+fn single_binary_file_order_reports_in_sync_and_drift() {
+    let f = Fixture::new(r#"{ from_file = "font.otf" }"#);
+    let bytes: &[u8] = &[0x4f, 0x54, 0x54, 0x4f, 0x00, 0xff, 0xfe, 0x80, 0x00];
+    std::fs::write(f.repo.path().join("orders/test/font.otf"), bytes).unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+
+    assert_eq!(status_diff_cell(&f.ok(&["status"]), "font.otf"), "\u{2713}");
+    assert!(f.ok(&["view", "test"]).contains("(no changes)"));
+
+    std::fs::write(f.home.path().join("font.otf"), [0xff, 0x00, 0xfe]).unwrap();
+    assert_eq!(status_diff_cell(&f.ok(&["status"]), "font.otf"), "\u{2260}");
+    assert!(f.ok(&["view", "test"]).contains("binary content differs"));
+}
+
+/// Status and view must reach the same verdict for every resource kind, both
+/// right after deployment and after the Target drifts.
+#[test]
+fn status_and_view_agree_for_every_resource_kind() {
+    type Drift = fn(&Path);
+    let cases: &[(&str, &str, Drift)] = &[
+        (r#"{ from_file = "text.txt" }"#, "text.txt", |t| {
+            std::fs::write(t, "drifted\n").unwrap()
+        }),
+        (r#"{ from_file = "blob.bin" }"#, "blob.bin", |t| {
+            std::fs::write(t, [0xff, 0x01]).unwrap()
+        }),
+        (r#"{ from_file = "tree" }"#, "tree", |t| {
+            std::fs::write(t.join("inner.bin"), [0x00, 0xfe]).unwrap()
+        }),
+        (
+            r#"{ name = "conf.json", from_config = { answer = 42 } }"#,
+            "conf.json",
+            |t| std::fs::write(t, r#"{ "answer": 7 }"#).unwrap(),
+        ),
+        (
+            r#"{ name = "link", kind = "symlink", link_to = "somewhere" }"#,
+            "link",
+            |t| {
+                std::fs::remove_file(t).unwrap();
+                symlink("elsewhere", t).unwrap();
+            },
+        ),
+        (
+            r#"{ name = "dir", kind = "directory", mode = "0700" }"#,
+            "dir",
+            |t| std::fs::set_permissions(t, std::fs::Permissions::from_mode(0o755)).unwrap(),
+        ),
+    ];
+
+    for (entry, name, drift) in cases {
+        let f = Fixture::new(entry);
+        let order = f.repo.path().join("orders/test");
+        std::fs::write(order.join("text.txt"), "text\n").unwrap();
+        std::fs::write(order.join("blob.bin"), [0x00, 0xff, 0x80]).unwrap();
+        std::fs::create_dir_all(order.join("tree")).unwrap();
+        std::fs::write(order.join("tree/inner.bin"), [0x80, 0x81]).unwrap();
+        f.ok(&["sync", "--force-source-to-target", "test"]);
+
+        for drifted in [false, true] {
+            if drifted {
+                drift(&f.home.path().join(name));
+            }
+            let cell = status_diff_cell(&f.ok(&["status"]), name);
+            let view = f.ok(&["view", "test"]);
+            let view_in_sync = view.contains("All orders are up to date");
+            assert_eq!(
+                cell == "\u{2713}",
+                view_in_sync,
+                "{entry} (drifted: {drifted}): status shows {cell}, view says:\n{view}"
+            );
+            assert_eq!(
+                view_in_sync, !drifted,
+                "{entry} (drifted: {drifted}):\n{view}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unreadable_targets_are_errors_in_status_and_view() {
+    let f = Fixture::new(r#"{ from_file = "text.txt" }, { from_file = "tree" }"#);
+    let order = f.repo.path().join("orders/test");
+    std::fs::write(order.join("text.txt"), "text\n").unwrap();
+    std::fs::create_dir_all(order.join("tree")).unwrap();
+    std::fs::write(order.join("tree/inner.txt"), "inner\n").unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    let unreadable = [
+        f.home.path().join("text.txt"),
+        f.home.path().join("tree/inner.txt"),
+    ];
+    for path in &unreadable {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    if std::fs::File::open(&unreadable[0]).is_ok() {
+        // Running with privileges that ignore file modes; nothing to observe.
+        return;
+    }
+
+    let status = f.run(&["status"]);
+    let view = f.run(&["view", "test"]);
+    // Restore access even if an assertion fails, for temp-directory cleanup.
+    for path in &unreadable {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let status = String::from_utf8_lossy(&status.stdout);
+    for name in ["text.txt", "tree/"] {
+        let row = status.lines().find(|line| line.contains(name)).unwrap();
+        assert!(
+            row.contains("error") && row.contains("could not read target"),
+            "unreadable target must be an error row:\n{status}"
+        );
+    }
+    let stdout = String::from_utf8_lossy(&view.stdout);
+    let stderr = String::from_utf8_lossy(&view.stderr);
+    assert!(!view.status.success(), "{stdout}{stderr}");
+    assert_eq!(
+        stdout.matches("(error: could not read target").count(),
+        2,
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("view failed with 2 comparison error(s)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn view_reports_failed_resolution_without_hiding_other_resources() {
+    let f = Fixture::new(
+        r#"{ from_file = "text.txt" }, { name = "conf.json", from_config = { theme = fun _ => "dark" } }"#,
+    );
+    std::fs::write(f.repo.path().join("orders/test/text.txt"), "text\n").unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    std::fs::write(f.home.path().join("conf.json"), "{ not json").unwrap();
+
+    let view = f.run(&["view", "test"]);
+    let stdout = String::from_utf8_lossy(&view.stdout);
+    let stderr = String::from_utf8_lossy(&view.stderr);
+    assert!(!view.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("text.txt -> ~/text.txt (no changes)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("conf.json -> ~/conf.json (error: evaluation failed)"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("Failed to evaluate test:conf.json"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("view failed with 1 evaluation error(s)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn content_only_view_does_not_inspect_target_contents() {
+    let f = Fixture::new(r#"{ from_file = "tree" }"#);
+    let order = f.repo.path().join("orders/test");
+    std::fs::create_dir_all(order.join("tree")).unwrap();
+    std::fs::write(order.join("tree/file.txt"), "tracked\n").unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    let target = f.home.path().join("tree");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&target).is_ok() {
+        // Running with privileges that ignore file modes; nothing to observe.
+        return;
+    }
+
+    let out = f.run(&["view", "--content-only", "test"]);
+    // Restore access even if an assertion fails, for temp-directory cleanup.
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("tree -> "), "{stdout}");
+    assert!(!stdout.contains("error"), "{stdout}");
+}
+
+#[test]
+fn unreadable_source_files_in_directories_are_errors_not_in_sync() {
+    let f = Fixture::new(r#"{ from_file = "tree" }"#);
+    let order = f.repo.path().join("orders/test");
+    std::fs::create_dir_all(order.join("tree")).unwrap();
+    std::fs::write(order.join("tree/inner.txt"), "inner\n").unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    // Unreadable on both sides used to compare as two empty files.
+    let unreadable = [
+        order.join("tree/inner.txt"),
+        f.home.path().join("tree/inner.txt"),
+    ];
+    for path in &unreadable {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    if std::fs::File::open(&unreadable[0]).is_ok() {
+        // Running with privileges that ignore file modes; nothing to observe.
+        return;
+    }
+
+    let status = f.run(&["status"]);
+    let view = f.run(&["view", "test"]);
+    // Restore access even if an assertion fails, for temp-directory cleanup.
+    for path in &unreadable {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let status = String::from_utf8_lossy(&status.stdout);
+    let row = status.lines().find(|line| line.contains("tree/")).unwrap();
+    assert!(
+        row.contains("error") && row.contains("could not read source"),
+        "{status}"
+    );
+    assert!(!view.status.success());
+    assert!(String::from_utf8_lossy(&view.stdout).contains("(error: could not read source"));
+}
+
+#[test]
+fn uninspectable_local_overlay_is_an_error_not_missing() {
+    let f = Fixture::new(r#"{ from_file = "tree", local = "private/overlay" }"#);
+    let order = f.repo.path().join("orders/test");
+    std::fs::create_dir_all(order.join("tree")).unwrap();
+    std::fs::write(order.join("tree/tracked.txt"), "tracked\n").unwrap();
+    std::fs::create_dir_all(order.join("private/overlay")).unwrap();
+    std::fs::write(order.join("private/overlay/local.txt"), "local\n").unwrap();
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    let private = order.join("private");
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&private).is_ok() {
+        // Running with privileges that ignore file modes; nothing to observe.
+        return;
+    }
+
+    let status = f.run(&["status"]);
+    let view = f.run(&["view", "test"]);
+    // Restore access even if an assertion fails, for temp-directory cleanup.
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let status = String::from_utf8_lossy(&status.stdout);
+    let row = status.lines().find(|line| line.contains("tree")).unwrap();
+    assert!(
+        row.contains("error") && row.contains("could not inspect local overlay"),
+        "{status}"
+    );
+    let stdout = String::from_utf8_lossy(&view.stdout);
+    assert!(!view.status.success(), "{stdout}");
+    assert!(!stdout.contains("All orders are up to date"), "{stdout}");
+}
+
+#[test]
+fn dry_run_sync_does_not_create_local_overlay_directory() {
+    let f = Fixture::new(r#"{ from_file = "tree", local = "tree.local" }"#);
+    let order = f.repo.path().join("orders/test");
+    std::fs::create_dir_all(order.join("tree")).unwrap();
+    std::fs::write(order.join("tree/file.txt"), "tracked\n").unwrap();
+
+    f.ok(&["status"]);
+    f.ok(&["view", "test"]);
+    f.ok(&["sync", "--dry-run", "--force-source-to-target", "test"]);
+    assert!(!order.join("tree.local").exists());
+
+    f.ok(&["sync", "--force-source-to-target", "test"]);
+    assert!(order.join("tree.local").is_dir());
+}
