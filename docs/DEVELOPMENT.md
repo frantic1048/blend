@@ -93,6 +93,7 @@ view, interactive sync, forced reconciliation, or failure
 | --- | --- |
 | Process entry and command dispatch | `src/main.rs` |
 | CLI definitions | `src/cli.rs` |
+| Offline Order authoring guidance | `skills/blend-orders/SKILL.md`, embedded by `src/skill.rs` |
 | Runtime paths, metadata, Source discovery | `src/context.rs`, `src/metadata.rs` |
 | Per-machine state and snapshots | `src/state.rs` |
 | Process sandbox | `src/sandbox.rs` |
@@ -290,6 +291,31 @@ end-to-end case showing its observable sync behavior.
 3. Wire dispatch in `src/main.rs`.
 4. Put genuinely shared command behavior in `src/commands/helpers.rs`.
 5. Add CLI-level tests for read/write classification and failure behavior.
+
+## Order authoring skill
+
+`blend skill print` is intentionally dispatched before configuration, sandbox,
+and `Context` setup. It must remain usable with missing or broken configuration
+and state, outside a checkout, with exact skill bytes on stdout. The canonical
+asset lives in the Cargo package, so archives and containers embed the same
+instructions; do not maintain a second copy in `website/`.
+
+Skill changes must trigger Blend CI, release-plz, and Website CI. The website
+serves the asset verbatim; its build checks the output bytes and that the
+homepage Order example matches the skill's tested example. Its current
+copy follows `main`; release/commit URLs redirect to the asset at that Git ref,
+while the installed binary's output remains authoritative for that release.
+
+`tests/skill_e2e.rs` validates the published complete Order examples and checks
+the skill's partial-ownership workflow against temporary Source, Target, and
+state paths. It checks `check`/`view` leave those paths unchanged, then verifies
+semantic preservation after sync. Agent discovery replays complement these
+deterministic tests: start one fresh agent from only the built homepage and one
+from only a local fixture plus the binary with networking disabled. Ask each
+to manage one TOML setting and preserve application-owned fields; retain their
+transcripts and confirm both author an Order directly and run `check` then
+`view` before any sync. Set HOME and XDG state to disposable directories so
+setup cannot deploy to a real home.
 
 ## Adding a format
 

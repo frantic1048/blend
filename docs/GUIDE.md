@@ -43,12 +43,17 @@ When `orders/` already exists, it only refreshes those modules; the
 `orders/blend/order.ncl` configuration Order is optional. When `orders/` is
 absent, it also creates and deploys the initial Blend configuration after
 checking that the Source root is empty apart from an optional `.git` entry.
-`blend create <order>` scaffolds an empty Order. `blend add` imports an existing
-Target as `from_file` Source, accepting absolute, `~`-prefixed, and relative paths:
+`blend create <order>` scaffolds an empty Order for direct editing:
 
 ```sh
 blend init
 blend create editor
+```
+
+`blend add` is a separate import workflow: it copies an existing Target as
+literal `from_file` Source. It accepts absolute, `~`-prefixed, and relative paths:
+
+```sh
 blend add git ~/.config/git
 blend add shell --prefix ~/.config/shell ~/.config/shell/config
 cd ~/.config/editor
@@ -73,7 +78,64 @@ selected Source root on standard error.
 
 ## Writing an Order
 
-A structured Order normally imports and applies the generated `Order` contract:
+Edit `orders/<name>/order.ncl` directly to author structured configuration;
+`blend add` does not edit structured settings. For agent guidance, run
+`blend skill print` from any directory, even offline before initialization.
+It emits the canonical [Order authoring skill](../skills/blend-orders/SKILL.md)
+bundled with that binary. The website publishes the
+[current skill](https://blend.pyonpyon.today/skills/blend-orders/SKILL.md) from
+`main`; use `/skills/blend-v<VERSION>/blend-orders/SKILL.md` on the same site for
+the matching release tag, or replace the tag with a full commit SHA. A revision
+must contain the skill; releases before this command have no bundled copy.
+
+### Manage one TOML setting
+
+After `blend create editor`, replace `orders/editor/order.ncl` with:
+
+```nickel
+let { Order, .. } = import "../order.contract.ncl" in
+{
+  blend = {
+    prefix = ["~/.config/editor/"],
+    files = [
+      {
+        name = "settings.toml",
+        format = "toml",
+        from_config =
+          {
+            theme = 'Enforce "dark",
+          }
+          |> blend.with_target_only 'Unmanaged,
+      },
+    ],
+  },
+} | Order
+```
+
+This enforces `theme` in `~/.config/editor/settings.toml` and preserves
+undeclared application fields, including an existing application-written
+`window` table. If no Target exists, it creates just the declared setting.
+Preservation is semantic rather than byte-for-byte. Use an ordinary
+`theme = "dark"` literal when divergence should remain interactive. For a
+partially owned nested record, attach `blend.with_target_only 'Unmanaged` at
+that record boundary too; whole-record `'Enforce` claims exact structure.
+
+```sh
+blend check editor
+blend view editor
+# Review the preview before applying:
+blend sync editor
+```
+
+`check` validates Source, while `view` evaluates against the actual Target and
+shows the intended difference. Neither command writes files. `sync` can prompt
+and write Source, Targets, generated modules, and state; declared enforcement
+can apply without prompting.
+
+### Compose multiple entries
+
+A structured Order imports and applies the generated `Order` contract. For
+example, combine metadata-driven settings with a literal Source directory:
 
 ```nickel
 let { Order, .. } = import "../order.contract.ncl" in

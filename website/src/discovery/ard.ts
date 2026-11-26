@@ -23,6 +23,15 @@ export function ardManifest(site: URL) {
   const manifest = {
     entries: [
       {
+        identifier: `urn:air:${publisher}:docs:order-authoring-skill`,
+        displayName: "Blend Order authoring skill",
+        type: "text/markdown",
+        url: new URL("/skills/blend-orders/SKILL.md", site).href,
+        description: "Canonical skill for authoring Nickel Orders directly, including safe ownership policies and preview-first workflows. This website copy follows main; blend skill print matches the installed binary.",
+        tags: ["blend", "nickel", "skill", "agents"],
+        representativeQueries: ["How should an agent write a Blend Order?", "How do I manage one setting while preserving application-owned fields?"],
+      },
+      {
         identifier: `urn:air:${publisher}:docs:user-guide`,
         displayName: "Blend user guide",
         type: "text/html",

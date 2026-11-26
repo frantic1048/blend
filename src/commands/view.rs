@@ -28,7 +28,13 @@ fn print_with(header: &str, annotations: &[String]) {
 
 /// Print one resource. Whether it is in sync comes from the shared
 /// assessment; this only decides how much of it to show.
-fn render_result(result: &BuildResult, assessment: &Assessment, header: &str, o: &ViewOptions) {
+fn render_result(
+    result: &BuildResult,
+    assessment: &Assessment,
+    header: &str,
+    o: &ViewOptions,
+    edit_hint: &str,
+) {
     let quiet = o.short && !o.viewing_specific;
     match assessment.state {
         SyncState::Unmanaged => {
@@ -40,7 +46,7 @@ fn render_result(result: &BuildResult, assessment: &Assessment, header: &str, o:
         SyncState::Unresolved => {
             println!(
                 "{header} {}",
-                style("(unresolved; edit order.ncl manually)").yellow()
+                style(format!("(unresolved; {edit_hint})")).yellow()
             );
             return;
         }
@@ -246,6 +252,7 @@ pub fn cmd_view(
     };
 
     for order_name in &to_view {
+        let edit_hint = crate::commands::helpers::order_edit_hint(ctx, order_name);
         if !ctx.orders_dir.join(order_name).join("order.ncl").exists() {
             log::error(&format!("Order '{order_name}' not found"));
             continue;
@@ -318,7 +325,7 @@ pub fn cmd_view(
                     if show_diff {
                         has_changes |= assessment.state.is_drift();
                     }
-                    render_result(result, &assessment, &file_header, &options);
+                    render_result(result, &assessment, &file_header, &options, &edit_hint);
                 }
                 Err(error) => {
                     println!(

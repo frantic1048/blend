@@ -2213,7 +2213,10 @@ fn test_unresolved_resolver_requires_manual_edit_for_both_force_directions() {
             "{direction} failed:\nstdout: {stdout}\nstderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(stdout.contains("edit order.ncl manually"));
+        assert!(stdout.contains(&order_path.display().to_string()));
+        assert!(stdout.contains("blend check manual-resolution"));
+        assert!(stdout.contains("blend view manual-resolution"));
+        assert!(stdout.contains("blend skill print"));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&target).unwrap())
                 .unwrap(),
@@ -2232,10 +2235,10 @@ fn test_unresolved_resolver_requires_manual_edit_for_both_force_directions() {
         &["sync", "--force-source-to-target", "manual-resolution"],
     );
     assert!(missing.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing.stdout)
-            .contains("resolver made no decision; edit order.ncl manually")
-    );
+    assert!(String::from_utf8_lossy(&missing.stdout).contains(&format!(
+        "resolver made no decision; edit {} directly",
+        order_path.display()
+    )));
     assert!(!target.exists());
     assert_eq!(
         std::fs::read_to_string(&order_path).unwrap(),

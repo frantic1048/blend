@@ -141,6 +141,7 @@ pub fn cmd_sync(
         if crate::interrupt::interrupted() {
             break;
         }
+        let edit_hint = crate::commands::helpers::order_edit_hint(ctx, order_name);
         // New target file — always apply Source -> Target.
         let target_kind = match node_kind(&result.target) {
             Ok(kind) => kind,
@@ -165,7 +166,7 @@ pub fn cmd_sync(
             }
             ResourceDisposition::Unresolved => {
                 log::warn(&format!(
-                    "Resolver made no decision for {}:{} at the resource root; edit order.ncl manually",
+                    "Resolver made no decision for {}:{} at the resource root; {edit_hint}",
                     order_name, result.name
                 ));
                 skipped += 1;
@@ -218,7 +219,7 @@ pub fn cmd_sync(
         }
         if target_kind.is_none() && !result.manual_resolution_paths.is_empty() {
             log::warn(&format!(
-                "Cannot create {}:{} because a resolver made no decision; edit order.ncl manually",
+                "Cannot create {}:{} because a resolver made no decision; {edit_hint}",
                 order_name, result.name
             ));
             skipped += 1;
@@ -429,7 +430,7 @@ pub fn cmd_sync(
             .is_some_and(|content| get_renderer(result.format).parse(&content).is_ok());
         if is_from_config && !result.manual_resolution_paths.is_empty() && !target_is_parseable {
             log::warn(&format!(
-                "Cannot resolve {}:{} automatically because its Target is not parseable and a resolver requires manual declaration editing",
+                "Cannot resolve {}:{} automatically because its Target is not parseable and a resolver requires manual declaration editing; {edit_hint}",
                 order_name, result.name
             ));
             skipped += 1;
@@ -555,7 +556,7 @@ pub fn cmd_sync(
                 });
                 if manual_overlap {
                     log::warn(&format!(
-                        "Resolver made no decision for {}:{} key {}; edit order.ncl manually",
+                        "Resolver made no decision for {}:{} key {}; {edit_hint}",
                         order_name, result.name, change.path
                     ));
                     continue;
@@ -657,7 +658,7 @@ pub fn cmd_sync(
                         decisions.remove(key);
                     }
                     log::warn(&format!(
-                        "Skipped {} Target -> Source decision(s) for {}:{} because source rewriting is unavailable",
+                        "Skipped {} Target -> Source decision(s) for {}:{} because source rewriting is unavailable; {edit_hint}",
                         target_keys.len(),
                         order_name,
                         result.name
@@ -675,7 +676,7 @@ pub fn cmd_sync(
                         Ok(report) => {
                             for key in &report.unapplied {
                                 log::warn(&format!(
-                                    "Skipped {}:{} key {}: Target value could not be written back to order.ncl (resolve manually)",
+                                    "Skipped {}:{} key {}: Target value could not be written back to order.ncl; {edit_hint}",
                                     order_name, result.name, key
                                 ));
                                 decisions.remove(key);
@@ -816,7 +817,7 @@ pub fn cmd_sync(
                             "from_config contains logic"
                         };
                         log::warn(&format!(
-                            "Cannot apply Target -> Source for {}:{} ({}), skipping",
+                            "Cannot apply Target -> Source for {}:{} ({}), skipping; {edit_hint}",
                             order_name, result.name, reason
                         ));
                         SyncAction::Skip
@@ -928,7 +929,7 @@ pub fn cmd_sync(
                                     // alone so the remaining keys resurface
                                     // as a conflict instead of being masked.
                                     log::warn(&format!(
-                                        "Some keys in {}:{} could not be written back to order.ncl; they remain unresolved",
+                                        "Some keys in {}:{} could not be written back to order.ncl; they remain unresolved; {edit_hint}",
                                         order_name, result.name
                                     ));
                                 }
@@ -937,7 +938,7 @@ pub fn cmd_sync(
                         Ok(PullStatus::NothingApplied) => {
                             if !ctx.dry_run {
                                 log::warn(&format!(
-                                    "Cannot apply Target -> Source for {}:{} (no key could be rewritten in order.ncl), skipping",
+                                    "Cannot apply Target -> Source for {}:{} (no key could be rewritten in order.ncl), skipping; {edit_hint}",
                                     order_name, result.name
                                 ));
                             }

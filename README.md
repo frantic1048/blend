@@ -98,34 +98,26 @@ defaults. It creates and deploys a starter Blend configuration only when
 `orders/` is absent. Existing Source trees do not need an
 `orders/blend/order.ncl` Order.
 
-Import an existing target file or directory as a literal source entry:
-
-```sh
-blend add git ~/.config/git
-```
-
-For a structured configuration, create an order and edit its `order.ncl`:
+For precise configuration, author a Nickel Order directly. Create an Order:
 
 ```sh
 blend create editor
 ```
 
-A small structured order looks like this:
+Replace `orders/editor/order.ncl` with this complete structured TOML Order:
 
 ```nickel
 let { Order, .. } = import "../order.contract.ncl" in
 {
   blend = {
-    prefix = ["~/.config/example/"],
+    prefix = ["~/.config/editor/"],
     files = [
       {
         name = "settings.toml",
+        format = "toml",
         from_config =
           {
-            theme = "dark",
-            timeout =
-              fun { target } =>
-                if target == 'Absent then 30 else target,
+            theme = 'Enforce "dark",
           }
           |> blend.with_target_only 'Unmanaged,
       },
@@ -134,17 +126,34 @@ let { Order, .. } = import "../order.contract.ncl" in
 } | Order
 ```
 
-Here `theme` uses ordinary interactive reconciliation when it differs,
-`timeout` defaults to `30` only when absent, and undeclared target fields are
-outside Blend ownership.
+This enforces `theme` while retaining undeclared application-owned fields in
+`~/.config/editor/settings.toml`. Preservation is semantic; structured output
+may reformat the file. Use `theme = "dark"` for interactive reconciliation
+instead of automatic enforcement.
 
 Validate, preview, and reconcile:
 
 ```sh
-blend check
-blend view
-blend sync
+blend check editor
+blend view editor
+blend sync editor
 ```
+
+`check` and `view` are read-only. Review the preview before running `sync`, which
+can prompt and write to either Source or Target; enforced fields can apply
+without a prompt.
+
+To import an existing Target as literal `from_file` Source instead:
+
+```sh
+blend add git ~/.config/git
+```
+
+`add` is an import convenience, not the structured Order authoring interface.
+For agents, `blend skill print` prints the
+[Order authoring skill](skills/blend-orders/SKILL.md) bundled with the installed
+binary, offline and without a checkout or initialization. The
+[user guide](docs/GUIDE.md#writing-an-order) lists release-specific copies.
 
 Running `blend` without a subcommand shows deployment status. Dry-run output is
 command-specific: `blend sync --dry-run` reports prospective reconciliation,

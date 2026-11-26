@@ -57,6 +57,8 @@ jobs:
         run: |
           BINARY="target/${{ matrix.target }}/release/blend"
           "$BINARY" --version
+          "$BINARY" skill print > "$RUNNER_TEMP/blend-skill.md"
+          cmp skills/blend-orders/SKILL.md "$RUNNER_TEMP/blend-skill.md"
           "$BINARY" --sandbox force --blend-dir tests/fixtures check toml-basic
 
       - name: Package archive

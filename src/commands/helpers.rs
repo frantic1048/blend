@@ -10,6 +10,16 @@ use crate::fs_node::{NodeKind, node_kind};
 use crate::nickel;
 use crate::nickel::resolution::ResourceDisposition;
 
+/// Point manual reconciliation back to the authored Order and read-only checks.
+pub fn order_edit_hint(ctx: &Context, order_name: &str) -> String {
+    format!(
+        "edit {} directly, then run blend check {} and blend view {}; run blend skill print for Order authoring guidance",
+        ctx.orders_dir.join(order_name).join("order.ncl").display(),
+        order_name,
+        order_name
+    )
+}
+
 pub fn select_orders(ctx: &Context, orders: &[String]) -> Vec<String> {
     let mut selected: Vec<String> = if orders.is_empty() {
         discover_orders(&ctx.orders_dir).into_iter().collect()

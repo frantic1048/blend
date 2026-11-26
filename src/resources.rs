@@ -551,9 +551,7 @@ fn adopted_declaration(
         || old_entry.local.is_some()
         || !old_entry.exclude.is_empty()
     {
-        bail!(
-            "kind adoption would discard immutable, ignore, local, or exclude settings; edit order.ncl manually"
-        );
+        bail!("kind adoption would discard immutable, ignore, local, or exclude settings");
     }
     let comment_ranges = declaration_comment_ranges(&source)?;
     let mut desired = HashMap::<&str, String>::new();
@@ -568,9 +566,7 @@ fn adopted_declaration(
     match node_kind(&result.target)? {
         Some(NodeKind::Symlink) => {
             let link = std::fs::read_link(&result.target)?;
-            let text = link
-                .to_str()
-                .context("link destination is not UTF-8; edit order.ncl manually")?;
+            let text = link.to_str().context("link destination is not UTF-8")?;
             desired.insert("kind", literal("symlink"));
             desired.insert("link_to", literal(text));
         }
@@ -594,16 +590,16 @@ fn adopted_declaration(
                 }
                 let mut content = String::new();
                 file.read_to_string(&mut content)
-                    .context("Target content is not UTF-8; edit order.ncl manually")?;
+                    .context("Target content is not UTF-8")?;
                 desired.insert("from_config", literal(&content));
             }
             #[cfg(not(unix))]
             bail!("resource adoption requires Unix");
         }
         Some(NodeKind::Directory) => bail!(
-            "Target is a directory: import its contents as a content resource with from_file, or explicitly declare kind = \"directory\"; edit order.ncl manually"
+            "Target is a directory: import its contents as a content resource with from_file, or explicitly declare kind = \"directory\""
         ),
-        _ => bail!("unsupported Target node; edit order.ncl manually"),
+        _ => bail!("unsupported Target node"),
     }
     let resource_fields = [
         "kind",
@@ -627,7 +623,7 @@ fn adopted_declaration(
             if comment_ranges.iter().any(|comment| {
                 comment.start < field.full_range.end && comment.end > field.full_range.start
             }) {
-                bail!("resource field '{key}' contains comments; edit order.ncl manually");
+                bail!("resource field '{key}' contains comments");
             }
             edits.push((field.full_range.clone(), String::new()));
         }
@@ -663,9 +659,9 @@ fn adopted_declaration(
     let output = crate::nickel::format_source(&output)?;
     let new_order = evaluator
         .evaluate_source(&path, &output)
-        .context("rewritten declaration does not evaluate safely; edit order.ncl manually")?;
+        .context("rewritten declaration does not evaluate safely")?;
     if old_order.blend.files.len() != new_order.blend.files.len() {
-        bail!("rewrite changed the entry collection; edit order.ncl manually");
+        bail!("rewrite changed the entry collection");
     }
     for (i, (old, new)) in old_order
         .blend
@@ -675,7 +671,7 @@ fn adopted_declaration(
         .enumerate()
     {
         if i != index && old != new {
-            bail!("rewrite affects another entry; edit order.ncl manually");
+            bail!("rewrite affects another entry");
         }
     }
     let new_entry = new_order
@@ -685,15 +681,13 @@ fn adopted_declaration(
         .context("rewritten entry is absent")?;
     let old_entry = &old_order.blend.files[index];
     if old_entry.target_paths(old_order.global_prefix()).len() != 1 {
-        bail!(
-            "resource entry has multiple Targets; edit order.ncl manually to resolve them together"
-        );
+        bail!("resource entry has multiple Targets; resolve them together");
     }
     if new_entry.target_paths(new_order.global_prefix())
         != old_entry.target_paths(old_order.global_prefix())
         || new_entry.when != old_entry.when
     {
-        bail!("rewrite changes Target selection; edit order.ncl manually");
+        bail!("rewrite changes Target selection");
     }
     let built = crate::compose::build_file_entry_pub(
         ctx,
@@ -705,9 +699,7 @@ fn adopted_declaration(
         vec![],
     )?;
     if crate::commands::helpers::compute_content_diff_for_result(&built)?.has_changes {
-        bail!(
-            "rewritten declaration does not describe the observed Target; edit order.ncl manually"
-        );
+        bail!("rewritten declaration does not describe the observed Target");
     }
     Ok(Adoption {
         original: source,
@@ -854,7 +846,8 @@ pub fn sync_resource(
     }
     if !result.manual_resolution_paths.is_empty() {
         bail!(
-            "Cannot reconcile resource kinds while a resolver is unresolved; edit order.ncl manually"
+            "Cannot reconcile resource kinds while a resolver is unresolved; {}",
+            crate::commands::helpers::order_edit_hint(ctx, order)
         );
     }
     if result
@@ -864,25 +857,30 @@ pub fn sync_resource(
         write_result(result, ctx.dry_run)?;
         return Ok(SyncAction::ApplySourceToTarget);
     }
-    let proposed = if matches!(mode, SyncMode::ApplyTargetToSourceAll)
+    let proposed = if matches!(mode, SyncMode::ApplySourceToTargetAll) {
+        Err(anyhow::anyhow!("Target adoption not requested"))
+    } else if matches!(mode, SyncMode::ApplyTargetToSourceAll)
         && target_kind != Some(crate::commands::helpers::expected_node_kind(result))
     {
         Err(anyhow::anyhow!(
-            "target structure does not match Source; forced Target -> Source cannot change resource kind; reconcile interactively or edit order.ncl manually"
+            "target structure does not match Source; forced Target -> Source cannot change resource kind; reconcile interactively instead"
         ))
     } else if !result.automatic_source_paths.is_empty() {
         Err(anyhow::anyhow!(
-            "kind adoption would discard declared resolution authority; edit order.ncl manually"
+            "kind adoption would discard declared resolution authority"
         ))
-    } else if matches!(mode, SyncMode::ApplySourceToTargetAll) {
-        Err(anyhow::anyhow!("Target adoption not requested"))
     } else if no_rewrite {
-        Err(anyhow::anyhow!(
-            "--no-rewrite is set; edit order.ncl manually"
-        ))
+        Err(anyhow::anyhow!("--no-rewrite is set"))
     } else {
         adopted_declaration(ctx, order, index, result)
-    };
+    }
+    .map_err(|error| {
+        if matches!(mode, SyncMode::ApplySourceToTargetAll) {
+            error
+        } else {
+            anyhow::anyhow!("{error}; {}", crate::commands::helpers::order_edit_hint(ctx, order))
+        }
+    });
     let can_pull = proposed.is_ok();
     crate::sync::display_conflict(order, &result.name, &result.target, &diff, &ctx.home_dir);
     let action = match mode {

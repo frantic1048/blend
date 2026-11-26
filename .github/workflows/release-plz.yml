@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "src/**"
+      - "skills/**"
       - "tests/**"
       - "Cargo.toml"
       - "Cargo.lock"

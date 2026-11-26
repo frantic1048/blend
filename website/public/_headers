@@ -9,3 +9,6 @@
 
 /llms.txt
   Content-Type: text/plain; charset=utf-8
+
+/skills/blend-orders/SKILL.md
+  Content-Type: text/markdown; charset=utf-8

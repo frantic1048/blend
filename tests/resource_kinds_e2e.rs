@@ -242,14 +242,15 @@ fn computed_resource_declarations_report_manual_edit_without_claiming_success() 
     symlink("new", f.home.path().join("node")).unwrap();
     let out = f.run(&["sync", "--force-target-to-source", "test"]);
     assert!(!out.status.success());
-    assert!(
-        format!(
-            "{} {}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )
-        .contains("edit order.ncl manually")
+    let message = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert!(message.contains(f.source().to_str().unwrap()));
+    assert!(message.contains("blend skill print"));
+    assert!(message.contains("blend check test"));
+    assert!(!message.contains("order.ncl manually"), "{message}");
     assert_eq!(std::fs::read_to_string(f.source()).unwrap(), original);
 }
 
