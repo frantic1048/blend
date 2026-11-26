@@ -51,6 +51,16 @@ cargo test --locked
 `just build` produces `target/release/blend`; `just build-debug` produces the
 debug binary.
 
+## Branches and pull requests
+
+Branch from `main` and name development branches `dev/<topic>`, using a short
+kebab-case topic such as `dev/status-unify`. Do not use tool- or agent-specific
+prefixes. `release-plz/*` and `renovate/*` belong to their bots.
+
+Keep one topic per branch and pull request. Commit messages follow Conventional
+Commits; see [Release flow](#release-flow) for which types start a release and
+for the `(website)` scope.
+
 ## Architecture
 
 At a high level:
