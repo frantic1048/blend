@@ -14,6 +14,16 @@ with no client-side JavaScript or external styling framework.
 - Fonts in `public/fonts/` are Latin subsets of the Fraunces, EB Garamond, and
   JetBrains Mono variable fonts (SIL OFL 1.1, licenses alongside). They are
   stored with Git LFS; run `git lfs pull` if they appear as pointer files.
+- `/skills/blend-orders/SKILL.md` serves the canonical
+  `../skills/blend-orders/SKILL.md` verbatim, including its frontmatter, via an
+  Astro raw import. Edit only the canonical asset. The website follows `main`;
+  `blend skill print` serves the version bundled in the installed binary.
+  `/skills/<ref>/blend-orders/SKILL.md` redirects with HTTP 302 to that GitHub
+  revision's raw asset using Cloudflare Pages `public/_redirects`. Use a release
+  tag (`blend-vX.Y.Z`) or a full commit SHA for a fixed revision; the tag or
+  commit must contain the skill. `pnpm build` verifies that the generated skill
+  matches the canonical bytes, that `src/examples/author-editor.ncl` matches the
+  skill's example, and that the versioned redirect ships in `dist/`.
 - `/guide.md` serves `../docs/GUIDE.md` verbatim. `public/llms.txt` links to it
   and to the other canonical documents rather than repeating them.
 - `/.well-known/ard.json` serves the

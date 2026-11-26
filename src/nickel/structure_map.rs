@@ -1386,7 +1386,7 @@ pub fn file_entry_record(source: &str, index: usize) -> Result<RecordInfo> {
         if children.len() == 1 {
             return literal(children[0], want_array);
         }
-        anyhow::bail!("resource declaration is computed or ambiguous; edit order.ncl manually");
+        anyhow::bail!("resource declaration is computed or ambiguous");
     }
     fn field<'a>(
         record: tree_sitter::Node<'a>,
@@ -1407,13 +1407,13 @@ pub fn file_entry_record(source: &str, index: usize) -> Result<RecordInfo> {
             let parts = extract_field_path_segments(decl, source);
             if parts.first().is_some_and(|s| s == name) {
                 if parts.len() != 1 {
-                    anyhow::bail!("dotted resource declaration; edit order.ncl manually");
+                    anyhow::bail!("dotted resource declaration");
                 }
                 values.push(extract_field_value(decl).context("field has no literal value")?);
             }
         }
         if values.len() != 1 {
-            anyhow::bail!("ambiguous '{name}' declaration; edit order.ncl manually");
+            anyhow::bail!("ambiguous '{name}' declaration");
         }
         Ok(values[0])
     }
@@ -1429,7 +1429,7 @@ pub fn file_entry_record(source: &str, index: usize) -> Result<RecordInfo> {
     let mut seen = std::collections::HashSet::new();
     for field in &info.fields {
         if field.key_path.segments().len() != 1 || !seen.insert(field.key_path.clone()) {
-            anyhow::bail!("ambiguous entry fields; edit order.ncl manually");
+            anyhow::bail!("ambiguous entry fields");
         }
     }
     Ok(info)

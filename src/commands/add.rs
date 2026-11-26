@@ -59,7 +59,13 @@ pub fn cmd_add(
         let order_data = evaluator.evaluate(&order_path)?;
         (raw_source, Some(order_data))
     };
-    let structure = OrderSourceStructure::parse(&raw_source)?;
+    let structure = OrderSourceStructure::parse(&raw_source).map_err(|error| {
+        anyhow::anyhow!(
+            "Cannot import into {} automatically: {error}; edit {} directly, then run blend check {order} and blend view {order}. Run blend skill print for Order authoring guidance",
+            order_path.display(),
+            order_path.display()
+        )
+    })?;
     let global_prefix = order_data
         .as_ref()
         .map(Order::global_prefix)

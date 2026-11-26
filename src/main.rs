@@ -13,12 +13,13 @@ mod nickel;
 mod output;
 mod resources;
 mod sandbox;
+mod skill;
 mod state;
 mod sync;
 
 use clap::Parser;
 
-use cli::{Cli, Commands, InspectCommands, MaintainCommands};
+use cli::{Cli, Commands, InspectCommands, MaintainCommands, SkillCommands};
 use commands::{
     cmd_add, cmd_check, cmd_create, cmd_format, cmd_init, cmd_status, cmd_sync, cmd_table, cmd_view,
 };
@@ -29,6 +30,18 @@ use sync::{SyncMode, TerminalPrompter};
 
 fn main() {
     let cli = Cli::parse();
+    // Guidance must be available even when config, state, or the checkout is
+    // missing or invalid. Do not initialize the sandbox or runtime context.
+    if matches!(cli.command, Some(Commands::Skill(SkillCommands::Print))) {
+        if let Err(error) = skill::print() {
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                return;
+            }
+            eprintln!("Error: failed to print bundled skill: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let sandbox_mode = match sandbox_mode_from_cli_and_config(&cli) {
         Ok(mode) => mode,
         Err(e) => {
@@ -131,6 +144,7 @@ fn main() {
         }
         Some(Commands::Inspect(InspectCommands::Table)) => cmd_table(&ctx),
         Some(Commands::Maintain(MaintainCommands::Init { upgrade })) => cmd_init(&ctx, upgrade),
+        Some(Commands::Skill(_)) => unreachable!("skill commands are handled before runtime setup"),
         None => cmd_status(&ctx),
     };
 

@@ -6,6 +6,7 @@ on:
     paths:
       - "website/**"
       - "docs/GUIDE.md"
+      - "skills/blend-orders/SKILL.md"
       - "CHANGELOG.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "website/**"
       - "docs/GUIDE.md"
+      - "skills/blend-orders/SKILL.md"
       - "CHANGELOG.md"
       - "justfile"
       - ".github/workflows/website-ci.yml"

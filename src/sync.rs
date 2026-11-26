@@ -467,17 +467,20 @@ pub fn pull_from_config(
 
     for path in &outcome.unapplied {
         log::warn(&format!(
-            "Cannot apply Target -> Source for {} (no rewritable location in {})",
+            "Cannot apply Target -> Source for {} (no rewritable location in {}); {}",
             path,
-            ncl_path.display()
+            ncl_path.display(),
+            crate::commands::helpers::order_edit_hint(ctx, order_name)
         ));
     }
 
     // Log non-rewritable fields for user awareness
     for field in rewrite_result.non_rewritable_fields() {
         log::warn(&format!(
-            "Cannot apply Target -> Source for {}: {} (update order.ncl manually)",
-            field.name, field.reason
+            "Cannot apply Target -> Source for {}: {}; {}",
+            field.name,
+            field.reason,
+            crate::commands::helpers::order_edit_hint(ctx, order_name)
         ));
     }
 
@@ -847,8 +850,10 @@ pub fn pull_from_config_keys_with_changes(
             .any(|k| paths_related(k, &field.path))
         {
             log::warn(&format!(
-                "Cannot apply Target -> Source for {}: {} (update order.ncl manually)",
-                field.name, field.reason
+                "Cannot apply Target -> Source for {}: {}; {}",
+                field.name,
+                field.reason,
+                crate::commands::helpers::order_edit_hint(ctx, order_name)
             ));
         }
     }

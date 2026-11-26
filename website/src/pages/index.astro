@@ -2,6 +2,7 @@
 import Example from "../components/Example.astro";
 import Ornament from "../components/Ornament.astro";
 import Base from "../layouts/Base.astro";
+import authorEditor from "../examples/author-editor.ncl?raw";
 import assertSafety from "../examples/assert-safety.ncl?raw";
 import defaultWhenMissing from "../examples/default-when-missing.ncl?raw";
 import editorOrder from "../examples/editor.ncl?raw";
@@ -276,14 +277,45 @@ const menu = [
     <section class="start" aria-labelledby="start-title">
       <header class="section-head">
         <p class="kicker smallcaps">First cup</p>
-        <h2 id="start-title">Start with a file you already have.</h2>
+        <h2 id="start-title">Write the settings you want to own.</h2>
+        <p>
+          Create an Order, then edit its Nickel declaration directly. This example
+          enforces a dark theme while preserving other settings the editor writes.
+        </p>
       </header>
       <Example
         lang="sh"
         code={`brew install frantic1048/tap/blend
 mkdir dotfiles && cd dotfiles
 blend init
-blend add git ~/.config/git`}
+blend create editor`}
+      />
+      <p>On a fresh Source root, <code>blend init</code> also deploys the starter Blend configuration.</p>
+      <p>Replace <code>orders/editor/order.ncl</code> with this complete Order:</p>
+      <Example caption="orders/editor/order.ncl" code={authorEditor} />
+      <p>Validate it, inspect the proposed differences, then reconcile the editor settings:</p>
+      <Example
+        lang="sh"
+        code={`blend check editor
+blend view editor
+blend sync editor`}
+      />
+      <p>
+        <code>'Enforce</code> automatically repairs the theme when it differs;
+        <code>blend.with_target_only 'Unmanaged</code> leaves other top-level settings
+        to the application. Apply that policy at each record boundary where the
+        application owns additional fields.
+      </p>
+      <p>
+        Writing an Order with an agent? Run <code>blend skill print</code> for the guidance
+        bundled with your installed version, or read the
+        <a href="/skills/blend-orders/SKILL.md">Order authoring skill</a>, which follows <code>main</code>.
+      </p>
+      <h3>Import an existing Target instead</h3>
+      <p>To copy an existing configuration into a file-backed Order, use <code>blend add</code>:</p>
+      <Example
+        lang="sh"
+        code={`blend add git ~/.config/git`}
       />
       <details class="install-more">
         <summary class="smallcaps">Other ways to install</summary>

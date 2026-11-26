@@ -24,12 +24,13 @@ Inspect:
 Maintain:
   check   [read] Validate Source order definitions
   create  [source] Create a new order
-  add     [source] Add a Target file or directory to an order, creating it if needed
+  add     [source] Import a Target file or directory as literal Source
   format  [source] Format Source order files
   init    [source, target] Initialize or refresh Blend metadata and config
   sync    [source, target] Reconcile Source orders and Target files
 
 Other:
+  skill print  [read] Print bundled guidance for authoring Nickel Orders
   help    Print this message or the help of the given subcommand(s)
 ";
 
@@ -74,6 +75,19 @@ pub enum Commands {
 
     #[command(flatten)]
     Maintain(MaintainCommands),
+
+    /// [read] Guidance for authoring Nickel Orders
+    #[command(subcommand, arg_required_else_help = true)]
+    Skill(SkillCommands),
+}
+
+#[derive(Subcommand)]
+pub enum SkillCommands {
+    /// [read] Print the bundled SKILL.md verbatim, including frontmatter
+    #[command(
+        long_about = "Print the bundled SKILL.md verbatim, including frontmatter.\n\nWorks offline without a Source checkout or initialization. Writes only to stdout; does not read Blend configuration or state."
+    )]
+    Print,
 }
 
 #[derive(Subcommand)]
@@ -139,11 +153,13 @@ pub enum MaintainCommands {
         order: String,
     },
 
-    /// [source] Add a Target file or directory to an order, creating it if needed
+    /// [source] Import a Target file or directory as literal Source
     #[command(long_about = "\
-[source] Add a Target file or directory to an order, creating it if needed
+[source] Import a Target file or directory as literal Source
 
-Creates the order when it does not exist, copies the Target path into its Source tree, and appends a file entry to order.ncl.")]
+Creates the order when it does not exist, copies the Target path into its Source tree, and appends a from_file entry to order.ncl.
+
+For precise structured configuration and field ownership, edit orders/<name>/order.ncl directly using from_config. Run blend skill print for authoring guidance, then blend check <name> and blend view <name> before blend sync <name>.")]
     Add {
         /// Order to add the Target path to
         order: String,
