@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5](https://github.com/frantic1048/blend/compare/blend-v0.4.4...blend-v0.4.5) - 2026-11-26
+
+
+### Added
+- make direct Nickel Order authoring discoverable
+
+### Other
+- document branch naming for contributors and agents
+- Merge pull request #55 from frantic1048/renovate/actions-create-github-app-token-digest
+
 ## [0.4.4](https://github.com/frantic1048/blend/compare/blend-v0.4.3...blend-v0.4.4) - 2026-11-23
 
 
