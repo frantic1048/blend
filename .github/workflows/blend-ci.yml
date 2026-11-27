@@ -65,7 +65,7 @@ jobs:
         with:
           cache: false
           components: rustfmt, clippy
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: step-security/rust-cache@1b3ee6282a8cf15b5a9f6e7dca8f9c522280ff34 # v2.9.3
       - run: cargo fmt --check
       - run: cargo clippy --locked -- -D warnings
       - run: cargo test --locked
